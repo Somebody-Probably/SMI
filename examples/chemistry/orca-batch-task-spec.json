@@ -1,0 +1,22 @@
+{
+  "tasks": [
+    {
+      "id": "orca-water-opt",
+      "lane": "remote_cluster",
+      "priority": 120,
+      "write_set": [
+        "outputs/water.out",
+        "logs/water.log",
+        "reports/water.md"
+      ],
+      "metadata": {
+        "domain": "computational_chemistry",
+        "program": "orca",
+        "input_file": "examples/orca/input/water.inp",
+        "slurm_template": "examples/slurm/orca-manifest-worker.sbatch"
+      },
+      "prompt": "Manage an ORCA geometry optimization for examples/orca/input/water.inp. Confirm the ORCA binary/module and parallel settings, stage the input on the selected cluster, submit through examples/slurm/orca-manifest-worker.sbatch, monitor completion, harvest output and restart artifacts, and summarize convergence, warnings, final energy, and next recommended action."
+    }
+  ]
+}
+

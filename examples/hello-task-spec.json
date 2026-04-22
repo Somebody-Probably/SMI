@@ -1,0 +1,14 @@
+{
+  "tasks": [
+    {
+      "id": "hello-smi",
+      "lane": "fast_local",
+      "priority": 100,
+      "write_set": [
+        "notes/hello-smi.md"
+      ],
+      "prompt": "Create a short notes/hello-smi.md file explaining that this dry-run task was dispatched through the generic SMI manager."
+    }
+  ]
+}
+

@@ -1,0 +1,17 @@
+{
+  "order_type": "seed",
+  "payload": {
+    "tasks": [
+      {
+        "id": "followup-task",
+        "lane": "fast_local",
+        "priority": 150,
+        "write_set": [
+          "notes/followup.md"
+        ],
+        "prompt": "Create notes/followup.md with one paragraph summarizing the next research task."
+      }
+    ]
+  }
+}
+

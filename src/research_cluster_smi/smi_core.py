@@ -1,0 +1,587 @@
+"""Small generic SMI runtime.
+
+The runtime is intentionally plain SQLite plus filesystem artifacts. It is
+not QFF-specific: tasks carry prompts, write sets, priorities, dependencies,
+and metadata; workers consume them through lanes and slots.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+
+DEFAULT_LANES: dict[str, dict[str, Any]] = {
+    "fast_local": {"max_slots": 2, "description": "Short local agent tasks."},
+    "heavy_local": {"max_slots": 1, "description": "Longer local agent tasks."},
+    "verify_local": {"max_slots": 1, "description": "Local validation and review."},
+    "remote_cluster": {"max_slots": 1, "description": "Placeholder for remote cluster validation."},
+}
+
+
+SCHEMA = """
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS runs (
+    run_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    config_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS lanes (
+    run_id TEXT NOT NULL,
+    lane TEXT NOT NULL,
+    max_slots INTEGER NOT NULL DEFAULT 1,
+    admission_state TEXT NOT NULL DEFAULT 'open',
+    backpressure TEXT NOT NULL DEFAULT 'none',
+    config_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (run_id, lane),
+    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+);
+
+CREATE TABLE IF NOT EXISTS slots (
+    run_id TEXT NOT NULL,
+    slot_id TEXT NOT NULL,
+    lane TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'idle',
+    current_lease_id TEXT,
+    last_heartbeat_at TEXT,
+    heartbeat_timeout_sec INTEGER NOT NULL DEFAULT 300,
+    PRIMARY KEY (run_id, slot_id),
+    FOREIGN KEY (run_id, lane) REFERENCES lanes(run_id, lane)
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    run_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    lane TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ready',
+    priority INTEGER NOT NULL DEFAULT 100,
+    dependencies_json TEXT NOT NULL DEFAULT '[]',
+    write_set_json TEXT NOT NULL DEFAULT '[]',
+    prompt_path TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, task_id),
+    FOREIGN KEY (run_id, lane) REFERENCES lanes(run_id, lane)
+);
+
+CREATE TABLE IF NOT EXISTS attempts (
+    run_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    slot_id TEXT,
+    lease_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    enqueued_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    result_json TEXT NOT NULL DEFAULT '{}',
+    failure_class TEXT,
+    diagnostics TEXT,
+    PRIMARY KEY (run_id, attempt_id),
+    FOREIGN KEY (run_id, task_id) REFERENCES tasks(run_id, task_id)
+);
+
+CREATE TABLE IF NOT EXISTS leases (
+    run_id TEXT NOT NULL,
+    lease_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    slot_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    issued_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    PRIMARY KEY (run_id, lease_id),
+    FOREIGN KEY (run_id, task_id) REFERENCES tasks(run_id, task_id)
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    sequence_no INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id TEXT NOT NULL UNIQUE,
+    run_id TEXT NOT NULL,
+    message_type TEXT NOT NULL,
+    lane TEXT,
+    task_id TEXT,
+    attempt_id TEXT,
+    lease_id TEXT,
+    slot_id TEXT,
+    timestamp TEXT NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_ready ON tasks(run_id, lane, status, priority DESC);
+CREATE INDEX IF NOT EXISTS idx_slots_idle ON slots(run_id, lane, status);
+CREATE INDEX IF NOT EXISTS idx_leases_active ON leases(run_id, status);
+CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, sequence_no);
+"""
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def json_dumps(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+@dataclass(frozen=True)
+class Assignment:
+    task_id: str
+    attempt_id: str
+    lease_id: str
+    slot_id: str
+    lane: str
+    prompt_path: str | None
+    metadata: dict[str, Any]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "attempt_id": self.attempt_id,
+            "lease_id": self.lease_id,
+            "slot_id": self.slot_id,
+            "lane": self.lane,
+            "prompt_path": self.prompt_path,
+            "metadata": self.metadata,
+        }
+
+
+class SMIRuntime:
+    """SQLite-backed SMI runtime."""
+
+    def __init__(self, db_path: str | Path, run_dir: str | Path | None = None) -> None:
+        self.db_path = Path(db_path)
+        self.run_dir = Path(run_dir) if run_dir else self.db_path.parent
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(str(self.db_path))
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(SCHEMA)
+        self.conn.commit()
+
+    def close(self) -> None:
+        self.conn.close()
+
+    def initialize_run(
+        self,
+        run_id: str,
+        lanes: dict[str, dict[str, Any]] | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> None:
+        lanes = lanes or DEFAULT_LANES
+        now = utc_now()
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO runs(run_id, created_at, status, config_json) VALUES(?,?,?,?)",
+                (run_id, now, "active", json_dumps(config or {})),
+            )
+            for lane, lane_config in lanes.items():
+                self.conn.execute(
+                    """
+                    INSERT OR REPLACE INTO lanes(
+                        run_id, lane, max_slots, admission_state, backpressure, config_json
+                    ) VALUES(?,?,?,?,?,?)
+                    """,
+                    (
+                        run_id,
+                        lane,
+                        int(lane_config.get("max_slots", 1)),
+                        lane_config.get("admission_state", "open"),
+                        lane_config.get("backpressure", "none"),
+                        json_dumps(lane_config),
+                    ),
+                )
+        self.publish_event("run.initialized", run_id, payload={"lanes": sorted(lanes)})
+
+    def publish_event(
+        self,
+        message_type: str,
+        run_id: str,
+        *,
+        lane: str | None = None,
+        task_id: str | None = None,
+        attempt_id: str | None = None,
+        lease_id: str | None = None,
+        slot_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        row = (
+            str(uuid.uuid4()),
+            run_id,
+            message_type,
+            lane,
+            task_id,
+            attempt_id,
+            lease_id,
+            slot_id,
+            utc_now(),
+            json_dumps(payload or {}),
+        )
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO events(
+                    message_id, run_id, message_type, lane, task_id, attempt_id,
+                    lease_id, slot_id, timestamp, payload_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                row,
+            )
+        event_file = self.run_dir / "events.jsonl"
+        record = {
+            "message_id": row[0],
+            "run_id": run_id,
+            "message_type": message_type,
+            "lane": lane,
+            "task_id": task_id,
+            "attempt_id": attempt_id,
+            "lease_id": lease_id,
+            "slot_id": slot_id,
+            "timestamp": row[8],
+            "payload": payload or {},
+        }
+        with event_file.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+    def register_slot(self, run_id: str, lane: str, slot_id: str, heartbeat_timeout_sec: int = 300) -> None:
+        now = utc_now()
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO slots(
+                    run_id, slot_id, lane, status, last_heartbeat_at, heartbeat_timeout_sec
+                ) VALUES(?,?,?,?,?,?)
+                """,
+                (run_id, slot_id, lane, "idle", now, heartbeat_timeout_sec),
+            )
+            self.conn.execute(
+                "UPDATE slots SET last_heartbeat_at=? WHERE run_id=? AND slot_id=?",
+                (now, run_id, slot_id),
+            )
+        self.publish_event("slot.registered", run_id, lane=lane, slot_id=slot_id)
+
+    def seed_task(
+        self,
+        run_id: str,
+        lane: str,
+        *,
+        task_id: str,
+        priority: int = 100,
+        dependencies: Iterable[str] | None = None,
+        write_set: Iterable[str] | None = None,
+        prompt_path: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        dependencies_list = list(dependencies or [])
+        status = "blocked" if dependencies_list else "ready"
+        now = utc_now()
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO tasks(
+                    run_id, task_id, lane, status, priority, dependencies_json,
+                    write_set_json, prompt_path, metadata_json, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    run_id,
+                    task_id,
+                    lane,
+                    status,
+                    int(priority),
+                    json_dumps(dependencies_list),
+                    json_dumps(list(write_set or [])),
+                    prompt_path,
+                    json_dumps(metadata or {}),
+                    now,
+                    now,
+                ),
+            )
+        self.publish_event(
+            "task.seeded",
+            run_id,
+            lane=lane,
+            task_id=task_id,
+            payload={"status": status, "priority": priority},
+        )
+        return task_id
+
+    def set_run_status(self, run_id: str, status: str) -> None:
+        if status not in {"active", "paused", "draining", "completed", "aborted"}:
+            raise ValueError(f"Unsupported run status: {status}")
+        with self.conn:
+            self.conn.execute("UPDATE runs SET status=? WHERE run_id=?", (status, run_id))
+            if status == "draining":
+                self.conn.execute(
+                    "UPDATE lanes SET admission_state='draining' WHERE run_id=?",
+                    (run_id,),
+                )
+        self.publish_event(f"run.{status}", run_id)
+
+    def _active_write_sets(self, run_id: str) -> set[str]:
+        rows = self.conn.execute(
+            """
+            SELECT write_set_json FROM tasks
+            WHERE run_id=? AND status IN ('leased', 'running')
+            """,
+            (run_id,),
+        ).fetchall()
+        active: set[str] = set()
+        for row in rows:
+            active.update(json.loads(row["write_set_json"] or "[]"))
+        return active
+
+    def _pick_ready_task(self, run_id: str, lane: str) -> sqlite3.Row | None:
+        active = self._active_write_sets(run_id)
+        rows = self.conn.execute(
+            """
+            SELECT * FROM tasks
+            WHERE run_id=? AND lane=? AND status IN ('ready', 'retry_ready')
+            ORDER BY priority DESC, created_at ASC
+            """,
+            (run_id, lane),
+        ).fetchall()
+        for row in rows:
+            write_set = set(json.loads(row["write_set_json"] or "[]"))
+            if not (write_set & active):
+                return row
+        return None
+
+    def claim_next_task(self, run_id: str, slot_id: str) -> Assignment | None:
+        with self.conn:
+            slot = self.conn.execute(
+                "SELECT * FROM slots WHERE run_id=? AND slot_id=?",
+                (run_id, slot_id),
+            ).fetchone()
+            if not slot or slot["status"] != "idle":
+                return None
+            run = self.conn.execute("SELECT status FROM runs WHERE run_id=?", (run_id,)).fetchone()
+            if not run or run["status"] != "active":
+                return None
+            lane = self.conn.execute(
+                "SELECT * FROM lanes WHERE run_id=? AND lane=?",
+                (run_id, slot["lane"]),
+            ).fetchone()
+            if not lane or lane["admission_state"] != "open":
+                return None
+            active_count = self.conn.execute(
+                """
+                SELECT COUNT(*) FROM slots
+                WHERE run_id=? AND lane=? AND status IN ('leased', 'busy')
+                """,
+                (run_id, slot["lane"]),
+            ).fetchone()[0]
+            if active_count >= int(lane["max_slots"]):
+                return None
+            task = self._pick_ready_task(run_id, slot["lane"])
+            if task is None:
+                return None
+
+            attempt_id = f"attempt-{uuid.uuid4().hex[:12]}"
+            lease_id = f"lease-{uuid.uuid4().hex[:12]}"
+            now = utc_now()
+            expires = (
+                datetime.now(timezone.utc) + timedelta(seconds=int(slot["heartbeat_timeout_sec"]))
+            ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            self.conn.execute(
+                "UPDATE tasks SET status='leased', updated_at=? WHERE run_id=? AND task_id=?",
+                (now, run_id, task["task_id"]),
+            )
+            self.conn.execute(
+                "UPDATE slots SET status='leased', current_lease_id=?, last_heartbeat_at=? WHERE run_id=? AND slot_id=?",
+                (lease_id, now, run_id, slot_id),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO attempts(
+                    run_id, attempt_id, task_id, slot_id, lease_id, status, enqueued_at
+                ) VALUES(?,?,?,?,?,?,?)
+                """,
+                (run_id, attempt_id, task["task_id"], slot_id, lease_id, "pending", now),
+            )
+            self.conn.execute(
+                """
+                INSERT INTO leases(
+                    run_id, lease_id, task_id, attempt_id, slot_id, status, issued_at, expires_at
+                ) VALUES(?,?,?,?,?,?,?,?)
+                """,
+                (run_id, lease_id, task["task_id"], attempt_id, slot_id, "active", now, expires),
+            )
+        self.publish_event(
+            "task.claimed",
+            run_id,
+            lane=slot["lane"],
+            task_id=task["task_id"],
+            attempt_id=attempt_id,
+            lease_id=lease_id,
+            slot_id=slot_id,
+        )
+        return Assignment(
+            task_id=task["task_id"],
+            attempt_id=attempt_id,
+            lease_id=lease_id,
+            slot_id=slot_id,
+            lane=slot["lane"],
+            prompt_path=task["prompt_path"],
+            metadata=json.loads(task["metadata_json"] or "{}"),
+        )
+
+    def start_attempt(self, run_id: str, attempt_id: str) -> None:
+        now = utc_now()
+        row = self.conn.execute(
+            "SELECT task_id, slot_id, lease_id FROM attempts WHERE run_id=? AND attempt_id=?",
+            (run_id, attempt_id),
+        ).fetchone()
+        if not row:
+            raise KeyError(f"Unknown attempt: {attempt_id}")
+        with self.conn:
+            self.conn.execute(
+                "UPDATE attempts SET status='running', started_at=? WHERE run_id=? AND attempt_id=?",
+                (now, run_id, attempt_id),
+            )
+            self.conn.execute(
+                "UPDATE tasks SET status='running', updated_at=? WHERE run_id=? AND task_id=?",
+                (now, run_id, row["task_id"]),
+            )
+            self.conn.execute(
+                "UPDATE slots SET status='busy', last_heartbeat_at=? WHERE run_id=? AND slot_id=?",
+                (now, run_id, row["slot_id"]),
+            )
+        self.publish_event(
+            "attempt.started",
+            run_id,
+            task_id=row["task_id"],
+            attempt_id=attempt_id,
+            lease_id=row["lease_id"],
+            slot_id=row["slot_id"],
+        )
+
+    def complete_attempt(self, run_id: str, attempt_id: str, result: dict[str, Any] | None = None) -> None:
+        now = utc_now()
+        row = self.conn.execute(
+            "SELECT task_id, slot_id, lease_id FROM attempts WHERE run_id=? AND attempt_id=?",
+            (run_id, attempt_id),
+        ).fetchone()
+        if not row:
+            raise KeyError(f"Unknown attempt: {attempt_id}")
+        with self.conn:
+            self.conn.execute(
+                "UPDATE attempts SET status='completed', completed_at=?, result_json=? WHERE run_id=? AND attempt_id=?",
+                (now, json_dumps(result or {}), run_id, attempt_id),
+            )
+            self.conn.execute(
+                "UPDATE tasks SET status='completed', updated_at=? WHERE run_id=? AND task_id=?",
+                (now, run_id, row["task_id"]),
+            )
+            self.conn.execute(
+                "UPDATE leases SET status='released' WHERE run_id=? AND lease_id=?",
+                (run_id, row["lease_id"]),
+            )
+            self.conn.execute(
+                "UPDATE slots SET status='idle', current_lease_id=NULL, last_heartbeat_at=? WHERE run_id=? AND slot_id=?",
+                (now, run_id, row["slot_id"]),
+            )
+        self.publish_event(
+            "attempt.completed",
+            run_id,
+            task_id=row["task_id"],
+            attempt_id=attempt_id,
+            lease_id=row["lease_id"],
+            slot_id=row["slot_id"],
+            payload=result or {},
+        )
+
+    def fail_attempt(
+        self,
+        run_id: str,
+        attempt_id: str,
+        *,
+        failure_class: str,
+        diagnostics: str = "",
+        retryable: bool = True,
+    ) -> None:
+        now = utc_now()
+        row = self.conn.execute(
+            "SELECT task_id, slot_id, lease_id FROM attempts WHERE run_id=? AND attempt_id=?",
+            (run_id, attempt_id),
+        ).fetchone()
+        if not row:
+            raise KeyError(f"Unknown attempt: {attempt_id}")
+        next_status = "retry_ready" if retryable else "rejected"
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE attempts
+                SET status='failed', completed_at=?, failure_class=?, diagnostics=?
+                WHERE run_id=? AND attempt_id=?
+                """,
+                (now, failure_class, diagnostics, run_id, attempt_id),
+            )
+            self.conn.execute(
+                "UPDATE tasks SET status=?, updated_at=? WHERE run_id=? AND task_id=?",
+                (next_status, now, run_id, row["task_id"]),
+            )
+            self.conn.execute(
+                "UPDATE leases SET status='released' WHERE run_id=? AND lease_id=?",
+                (run_id, row["lease_id"]),
+            )
+            self.conn.execute(
+                "UPDATE slots SET status='idle', current_lease_id=NULL, last_heartbeat_at=? WHERE run_id=? AND slot_id=?",
+                (now, run_id, row["slot_id"]),
+            )
+        self.publish_event(
+            "attempt.failed",
+            run_id,
+            task_id=row["task_id"],
+            attempt_id=attempt_id,
+            lease_id=row["lease_id"],
+            slot_id=row["slot_id"],
+            payload={"failure_class": failure_class, "retryable": retryable},
+        )
+
+    def status_summary(self, run_id: str) -> dict[str, Any]:
+        run = self.conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        if not run:
+            raise KeyError(f"Run not found: {run_id}")
+        task_rows = self.conn.execute(
+            "SELECT status, COUNT(*) AS count FROM tasks WHERE run_id=? GROUP BY status",
+            (run_id,),
+        ).fetchall()
+        slot_rows = self.conn.execute(
+            "SELECT lane, status, COUNT(*) AS count FROM slots WHERE run_id=? GROUP BY lane, status",
+            (run_id,),
+        ).fetchall()
+        lane_rows = self.conn.execute(
+            "SELECT lane, max_slots, admission_state, backpressure FROM lanes WHERE run_id=? ORDER BY lane",
+            (run_id,),
+        ).fetchall()
+        return {
+            "run_id": run_id,
+            "status": run["status"],
+            "tasks": {row["status"]: row["count"] for row in task_rows},
+            "slots": [
+                {"lane": row["lane"], "status": row["status"], "count": row["count"]}
+                for row in slot_rows
+            ],
+            "lanes": [dict(row) for row in lane_rows],
+            "run_dir": str(self.run_dir),
+        }
+
+
+def run_dir_for(run_root: str | Path, run_id: str) -> Path:
+    return Path(run_root).expanduser().resolve() / run_id
+
+
+def runtime_for(run_root: str | Path, run_id: str) -> SMIRuntime:
+    rd = run_dir_for(run_root, run_id)
+    return SMIRuntime(rd / "run.db", rd)
+

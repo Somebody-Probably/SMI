@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research-cluster-smi"
+version = "0.1.0"
+description = "Portable MacBook-friendly cluster connection workflow and generic SMI manager runtime."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "QFF/SMI Research Group" }
+]
+dependencies = []
+
+[project.scripts]
+research-cluster = "research_cluster_smi.cluster_cli:main"
+research-smi = "research_cluster_smi.smi_cli:main"
+research-chem = "research_cluster_smi.chem_cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+

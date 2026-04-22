@@ -1,0 +1,22 @@
+{
+  "tasks": [
+    {
+      "id": "qe-si-scf",
+      "lane": "remote_cluster",
+      "priority": 120,
+      "write_set": [
+        "outputs/si.scf.out",
+        "logs/si.scf.log",
+        "reports/si.scf.md"
+      ],
+      "metadata": {
+        "domain": "computational_chemistry",
+        "program": "qe",
+        "input_file": "examples/qe/input/si.scf.in",
+        "slurm_template": "examples/slurm/qe-manifest-worker.sbatch"
+      },
+      "prompt": "Manage a Quantum ESPRESSO SCF calculation for examples/qe/input/si.scf.in. Confirm pseudopotential requirements, stage the input on the selected cluster, submit through examples/slurm/qe-manifest-worker.sbatch, monitor completion, harvest outputs, and summarize convergence, warnings, final energy, and next recommended action."
+    }
+  ]
+}
+

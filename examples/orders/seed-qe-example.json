@@ -1,0 +1,23 @@
+{
+  "order_type": "seed",
+  "payload": {
+    "tasks": [
+      {
+        "id": "qe-si-scf-followup",
+        "lane": "remote_cluster",
+        "priority": 140,
+        "write_set": [
+          "outputs/si.scf.out",
+          "reports/si.scf.md"
+        ],
+        "metadata": {
+          "domain": "computational_chemistry",
+          "program": "qe",
+          "input_file": "examples/qe/input/si.scf.in"
+        },
+        "prompt": "Submit or review the QE silicon SCF example. Check that the pseudopotential named in the input is available, then use the configured cluster profile and QE SLURM template. Report final status and next action."
+      }
+    ]
+  }
+}
+

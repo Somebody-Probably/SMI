@@ -1,0 +1,27 @@
+Host trillium
+  HostName trillium.alliancecan.ca
+  User YOUR_ALLIANCE_USERNAME
+  ControlMaster auto
+  ControlPath ~/.ssh/sockets/%r@%h:%p
+  ControlPersist 4h
+  ServerAliveInterval 60
+  ServerAliveCountMax 3
+
+Host narval
+  HostName narval.alliancecan.ca
+  User YOUR_ALLIANCE_USERNAME
+  ControlMaster auto
+  ControlPath ~/.ssh/sockets/%r@%h:%p
+  ControlPersist 4h
+  ServerAliveInterval 60
+  ServerAliveCountMax 3
+
+Host nibi
+  HostName nibi.alliancecan.ca
+  User YOUR_ALLIANCE_USERNAME
+  ControlMaster auto
+  ControlPath ~/.ssh/sockets/%r@%h:%p
+  ControlPersist 4h
+  ServerAliveInterval 60
+  ServerAliveCountMax 3
+

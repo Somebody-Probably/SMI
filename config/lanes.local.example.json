@@ -1,0 +1,19 @@
+{
+  "fast_local": {
+    "max_slots": 2,
+    "description": "Short local MacBook tasks."
+  },
+  "heavy_local": {
+    "max_slots": 1,
+    "description": "Longer local tasks that should not run in parallel."
+  },
+  "verify_local": {
+    "max_slots": 1,
+    "description": "Local validation and review lane."
+  },
+  "remote_cluster": {
+    "max_slots": 1,
+    "description": "Bookkeeping lane for work that is submitted to SLURM."
+  }
+}
+
