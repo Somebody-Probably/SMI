@@ -16,6 +16,7 @@ research-cluster --config config/clusters.json doctor
 research-cluster --config config/clusters.json connect
 research-cluster --config config/clusters.json sync-up ./ /scratch/YOUR_USER/research-workspace/
 research-cluster --config config/clusters.json submit examples/slurm/generic-python-job.sbatch --upload
+research-cluster --config config/clusters.json submit examples/slurm/generic-python-job.sbatch --upload --profile qff-trillium-debug
 research-cluster --config config/clusters.json status
 research-cluster --config config/clusters.json sync-down /scratch/YOUR_USER/research-workspace/outputs/ ./outputs/
 ```
@@ -28,9 +29,16 @@ research-cluster --config config/clusters.json sync-down /scratch/YOUR_USER/rese
 - `project_dir`: optional project allocation path.
 - `remote_project_dir`: default sync and submit directory.
 - `account`: SLURM account.
-- `sbatch_defaults`: default flags added by `research-cluster submit`.
+- `sbatch_defaults`: backward-compatible default flags added by `research-cluster submit`.
+- `default_sbatch_profile`: named profile used by `submit` when no `--profile` is supplied.
+- `sbatch_profiles`: named sets of default `sbatch` flags.
 
 Values may use placeholders such as `{user}` and `{account}`.
+
+The example Alliance config now uses account-only defaults for normal submits.
+That avoids passing stale partition, GPU, CPU, or memory assumptions to clusters
+whose policies can change. Lab-specific profiles such as `qff-trillium-debug`
+are opt-in.
 
 ## Policy Notes
 
@@ -39,4 +47,4 @@ Values may use placeholders such as `{user}` and `{account}`.
 - Prefer scratch for active runs and project storage for durable shared data.
 - For large transfers, use institutional tools such as Globus when available.
 - Avoid writing runtime logs to `$HOME` on compute nodes.
-
+- Verify partitions, GPU GRES names, and max walltime on the target cluster with `sinfo` before relying on an optional profile.

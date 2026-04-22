@@ -7,8 +7,8 @@ Host trillium
   ServerAliveInterval 60
   ServerAliveCountMax 3
 
-Host narval
-  HostName narval.alliancecan.ca
+Host fir
+  HostName fir.alliancecan.ca
   User YOUR_ALLIANCE_USERNAME
   ControlMaster auto
   ControlPath ~/.ssh/sockets/%r@%h:%p
@@ -25,3 +25,20 @@ Host nibi
   ServerAliveInterval 60
   ServerAliveCountMax 3
 
+Host narval
+  HostName narval.alliancecan.ca
+  User YOUR_ALLIANCE_USERNAME
+  ControlMaster auto
+  ControlPath ~/.ssh/sockets/%r@%h:%p
+  ControlPersist 4h
+  ServerAliveInterval 60
+  ServerAliveCountMax 3
+
+Host rorqual
+  HostName rorqual.alliancecan.ca
+  User YOUR_ALLIANCE_USERNAME
+  ControlMaster auto
+  ControlPath ~/.ssh/sockets/%r@%h:%p
+  ControlPersist 4h
+  ServerAliveInterval 60
+  ServerAliveCountMax 3

@@ -1,53 +1,189 @@
 {
   "default_cluster": "trillium",
+  "notes": [
+    "Default submit behavior is intentionally conservative: pass only --account and let the job script own resources.",
+    "Profiles named qff-* are examples extracted from the in-use qff_research setup; verify them with sinfo/sacctmgr before using them outside that allocation.",
+    "The 2025 Alliance renewal maps Niagara/Mist -> Trillium, Cedar -> Fir, Graham -> Nibi, and Beluga -> Rorqual."
+  ],
+  "legacy_aliases": {
+    "niagara": "trillium",
+    "mist": "trillium",
+    "cedar": "fir",
+    "graham": "nibi",
+    "beluga": "rorqual"
+  },
   "clusters": {
     "trillium": {
       "ssh_alias": "trillium",
       "host": "trillium.alliancecan.ca",
+      "successor_of": ["niagara", "mist"],
+      "system_role": "large_parallel_cpu_and_gpu",
+      "scheduler": "slurm",
       "user": "YOUR_ALLIANCE_USERNAME",
-      "scratch_dir": "/scratch/{user}",
-      "project_dir": "/project/YOUR_PROJECT_GROUP/{user}",
-      "remote_project_dir": "/scratch/{user}/research-workspace",
       "account": "YOUR_SLURM_ACCOUNT",
-      "sbatch_defaults": [
-        "--account={account}",
-        "--time=01:00:00",
-        "--cpus-per-task=4",
-        "--mem=8G"
-      ]
+      "scratch_dir": "/scratch/{user}",
+      "project_dir": "/project/{account}/{user}",
+      "remote_project_dir": "/scratch/{user}/research-workspace",
+      "sbatch_defaults": ["--account={account}"],
+      "default_sbatch_profile": "account-only",
+      "submission_notes": [
+        "QFF Trillium CPU jobs observed in qff_research use one node, one task, cpus-per-task, and sometimes mem=0 for whole-node jobs.",
+        "Do not assume GPU partition names or GRES on Trillium without checking current site docs or sinfo."
+      ],
+      "sbatch_profiles": {
+        "account-only": {
+          "description": "Portable default: job script supplies time, CPU, memory, partition, and GPU requests.",
+          "sbatch_defaults": ["--account={account}"]
+        },
+        "qff-trillium-debug": {
+          "description": "Observed qff_research/trillium/test_job.sh smoke-test profile.",
+          "source": "../qff_research/trillium/test_job.sh",
+          "sbatch_defaults": [
+            "--account={account}",
+            "--time=00:05:00",
+            "--nodes=1",
+            "--ntasks=1",
+            "--cpus-per-task=8",
+            "--mem=8G",
+            "--partition=debug"
+          ]
+        },
+        "qff-trillium-cpu-64": {
+          "description": "Observed qff_research/trillium/submit_64.sh single-node CPU profile.",
+          "source": "../qff_research/trillium/submit_64.sh",
+          "sbatch_defaults": [
+            "--account={account}",
+            "--time=01:00:00",
+            "--nodes=1",
+            "--ntasks=1",
+            "--cpus-per-task=32",
+            "--mem=32G"
+          ]
+        },
+        "qff-trillium-full-node": {
+          "description": "Observed QFF whole-node style used by heavy Trillium render/test jobs.",
+          "source": "../qff_research/trillium/submit_temperature_render_superheavy.sh",
+          "sbatch_defaults": [
+            "--account={account}",
+            "--time=24:00:00",
+            "--nodes=1",
+            "--ntasks=1",
+            "--cpus-per-task=192",
+            "--mem=0"
+          ]
+        }
+      }
     },
-    "narval-gpu": {
-      "ssh_alias": "narval",
-      "host": "narval.alliancecan.ca",
+    "fir": {
+      "ssh_alias": "fir",
+      "host": "fir.alliancecan.ca",
+      "successor_of": ["cedar"],
+      "system_role": "general_purpose_cpu_gpu_storage",
+      "scheduler": "slurm",
       "user": "YOUR_ALLIANCE_USERNAME",
-      "scratch_dir": "/scratch/{user}",
-      "project_dir": "/project/YOUR_PROJECT_GROUP/{user}",
-      "remote_project_dir": "/scratch/{user}/research-workspace",
       "account": "YOUR_SLURM_ACCOUNT",
-      "sbatch_defaults": [
-        "--account={account}",
-        "--gres=gpu:a100:1",
-        "--cpus-per-task=8",
-        "--mem=32G",
-        "--time=02:00:00"
-      ]
+      "scratch_dir": "/scratch/{user}",
+      "project_dir": "/project/{account}/{user}",
+      "remote_project_dir": "/scratch/{user}/research-workspace",
+      "sbatch_defaults": ["--account={account}"],
+      "default_sbatch_profile": "account-only",
+      "sbatch_profiles": {
+        "account-only": {
+          "description": "Portable default: job script supplies resource requests.",
+          "sbatch_defaults": ["--account={account}"]
+        }
+      }
     },
-    "nibi-gpu": {
+    "nibi": {
       "ssh_alias": "nibi",
       "host": "nibi.alliancecan.ca",
+      "successor_of": ["graham"],
+      "system_role": "general_purpose_cpu_gpu_storage",
+      "scheduler": "slurm",
       "user": "YOUR_ALLIANCE_USERNAME",
-      "scratch_dir": "/scratch/{user}",
-      "project_dir": "/project/YOUR_PROJECT_GROUP/{user}",
-      "remote_project_dir": "/scratch/{user}/research-workspace",
       "account": "YOUR_SLURM_ACCOUNT",
-      "sbatch_defaults": [
-        "--account={account}",
-        "--gres=gpu:h100:1",
-        "--cpus-per-task=12",
-        "--mem=64G",
-        "--time=03:00:00"
-      ]
+      "scratch_dir": "/scratch/{user}",
+      "project_dir": "/project/{account}/{user}",
+      "remote_project_dir": "/scratch/{user}/research-workspace",
+      "sbatch_defaults": ["--account={account}"],
+      "default_sbatch_profile": "account-only",
+      "submission_notes": [
+        "The QFF Alliance GPU workflow used Nibi for full H100 runs.",
+        "Verify GPU partition/GRES with sinfo because these names are site policy, not portable SLURM."
+      ],
+      "sbatch_profiles": {
+        "account-only": {
+          "description": "Portable default: job script supplies resource requests.",
+          "sbatch_defaults": ["--account={account}"]
+        },
+        "qff-nibi-h100": {
+          "description": "Observed qff_research/alliance Nibi H100 example.",
+          "source": "../qff_research/alliance/setup.sh",
+          "sbatch_defaults": [
+            "--account={account}",
+            "--partition=gpubase_bygpu_b1",
+            "--gres=gpu:h100:1",
+            "--cpus-per-task=12",
+            "--mem=64G",
+            "--time=03:00:00"
+          ]
+        }
+      }
+    },
+    "narval": {
+      "ssh_alias": "narval",
+      "host": "narval.alliancecan.ca",
+      "successor_of": [],
+      "system_role": "general_purpose_cpu_gpu_storage",
+      "scheduler": "slurm",
+      "user": "YOUR_ALLIANCE_USERNAME",
+      "account": "YOUR_SLURM_ACCOUNT",
+      "scratch_dir": "/scratch/{user}",
+      "project_dir": "/project/{account}/{user}",
+      "remote_project_dir": "/scratch/{user}/research-workspace",
+      "sbatch_defaults": ["--account={account}"],
+      "default_sbatch_profile": "account-only",
+      "submission_notes": [
+        "The QFF Alliance GPU workflow used Narval A100/MIG as smoke/debug fallback."
+      ],
+      "sbatch_profiles": {
+        "account-only": {
+          "description": "Portable default: job script supplies resource requests.",
+          "sbatch_defaults": ["--account={account}"]
+        },
+        "qff-narval-a100": {
+          "description": "Observed qff_research/alliance Narval A100 example.",
+          "source": "../qff_research/alliance/setup.sh",
+          "sbatch_defaults": [
+            "--account={account}",
+            "--partition=gpubase_bygpu_b1",
+            "--gres=gpu:a100:1",
+            "--cpus-per-task=12",
+            "--mem=64G",
+            "--time=03:00:00"
+          ]
+        }
+      }
+    },
+    "rorqual": {
+      "ssh_alias": "rorqual",
+      "host": "rorqual.alliancecan.ca",
+      "successor_of": ["beluga"],
+      "system_role": "general_purpose_cpu_gpu_storage",
+      "scheduler": "slurm",
+      "user": "YOUR_ALLIANCE_USERNAME",
+      "account": "YOUR_SLURM_ACCOUNT",
+      "scratch_dir": "/scratch/{user}",
+      "project_dir": "/project/{account}/{user}",
+      "remote_project_dir": "/scratch/{user}/research-workspace",
+      "sbatch_defaults": ["--account={account}"],
+      "default_sbatch_profile": "account-only",
+      "sbatch_profiles": {
+        "account-only": {
+          "description": "Portable default: job script supplies resource requests.",
+          "sbatch_defaults": ["--account={account}"]
+        }
+      }
     }
   }
 }
-

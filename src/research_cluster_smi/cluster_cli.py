@@ -62,6 +62,21 @@ def choose_cluster(config: dict[str, Any], name: str | None) -> tuple[str, dict[
     return cluster_name, cluster
 
 
+def sbatch_defaults_for(cluster: dict[str, Any], profile: str | None = None) -> list[str]:
+    profiles = cluster.get("sbatch_profiles") or {}
+    selected = profile or cluster.get("default_sbatch_profile")
+    if selected:
+        if selected not in profiles:
+            known = ", ".join(sorted(profiles)) or "<none>"
+            raise ConfigError(f"Unknown sbatch profile {selected!r}. Known profiles: {known}")
+        defaults = profiles[selected].get("sbatch_defaults", [])
+    else:
+        defaults = cluster.get("sbatch_defaults", [])
+    if not isinstance(defaults, list) or not all(isinstance(item, str) for item in defaults):
+        raise ConfigError("sbatch defaults must be a list of strings.")
+    return defaults
+
+
 def expand(value: str | None, cluster: dict[str, Any]) -> str:
     if value is None:
         return ""
@@ -111,6 +126,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(f"  ssh_alias: {cluster.get('ssh_alias')}")
         print(f"  remote_project_dir: {expand(cluster.get('remote_project_dir'), cluster)}")
         print(f"  account: {cluster.get('account', '<unset>')}")
+        profiles = sorted((cluster.get("sbatch_profiles") or {}).keys())
+        if profiles:
+            print(f"  sbatch_profiles: {', '.join(profiles)}")
     except ConfigError as exc:
         print(f"Config warning: {exc}", file=sys.stderr)
         return 2 if missing else 1
@@ -189,7 +207,7 @@ def cmd_submit(args: argparse.Namespace) -> int:
     else:
         remote_script = args.script
 
-    sbatch_defaults = [expand(flag, cluster) for flag in cluster.get("sbatch_defaults", [])]
+    sbatch_defaults = [expand(flag, cluster) for flag in sbatch_defaults_for(cluster, args.profile)]
     extra = args.sbatch_args or []
     remote_cmd = " ".join(
         [
@@ -260,6 +278,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("script")
     p.add_argument("--remote-dir")
     p.add_argument("--upload", action="store_true", help="Upload local script before sbatch.")
+    p.add_argument("--profile", help="Named sbatch profile from the selected cluster config.")
     p.add_argument("--sbatch-args", nargs="*", help="Extra sbatch flags after config defaults.")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_submit)

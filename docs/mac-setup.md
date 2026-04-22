@@ -34,6 +34,9 @@ Check the alias:
 ssh trillium hostname
 ```
 
+The example SSH config includes the current Alliance renewal systems used by
+this repo: `trillium`, `fir`, `nibi`, `narval`, and `rorqual`.
+
 Open a persistent session:
 
 ```bash
@@ -51,4 +54,3 @@ research-smi status --run-id smoke-001
 ```
 
 The run state is written under `runs/smoke-001/`. That directory is intentionally ignored by git.
-

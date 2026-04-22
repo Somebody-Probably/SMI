@@ -20,7 +20,7 @@ cp config/lanes.local.example.json config/lanes.local.json
 mkdir -p ~/.ssh/sockets
 ```
 
-Edit `config/clusters.json` and add your Alliance username, account, and remote paths. Add the relevant blocks from `config/ssh_config.example` to `~/.ssh/config`.
+Edit `config/clusters.json` and add your Alliance username, account, and remote paths. Add the relevant blocks from `config/ssh_config.example` to `~/.ssh/config`. The example config tracks the current Alliance renewal names: Trillium, Fir, Nibi, Narval, and Rorqual, with legacy aliases documented for Niagara, Cedar, Graham, and Beluga.
 
 Check the local setup:
 
@@ -51,6 +51,7 @@ Try the cluster dry-run path:
 research-cluster --config config/clusters.json connect --dry-run
 research-cluster --config config/clusters.json sync-up ./ research-workspace --dry-run
 research-cluster --config config/clusters.json submit examples/slurm/generic-python-job.sbatch --upload --dry-run
+research-cluster --config config/clusters.json submit examples/slurm/generic-python-job.sbatch --upload --profile qff-trillium-debug --dry-run
 research-cluster --config config/clusters.json status --dry-run
 ```
 
@@ -84,6 +85,7 @@ Included:
 
 - Mac-compatible Python CLI and bash wrappers.
 - Config-driven SSH aliases, remote paths, and sbatch defaults.
+- Current Alliance cluster examples with conservative account-only defaults and opt-in QFF-derived profiles.
 - SMI lanes, slots, tasks, attempts, leases, events, and JSONL event log.
 - Hot-folder orders for seed, cancel, reprioritize, pause, resume, drain, and lane resizing.
 - Dry-run worker path that writes result artifacts without launching an agent.
