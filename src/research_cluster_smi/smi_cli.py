@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import sys
@@ -10,9 +11,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .account_cluster import AccountClusterRunner
+from .account_gate import AccountGate, account_gate_path, load_resource_config
+from .agents import SUPPORTED_AGENT_PRESETS
 from .orders import OrderWatcher
 from .router import Router
-from .smi_core import DEFAULT_LANES, runtime_for, run_dir_for
+from .smi_core import DEFAULT_LANES, runtime_for, run_dir_for, utc_now
 from .worker import WorkerManager
 
 
@@ -147,6 +151,7 @@ def cmd_orders(args: argparse.Namespace) -> int:
 
 def cmd_worker(args: argparse.Namespace) -> int:
     runtime = runtime_for(args.run_root, args.run_id)
+    account_gate = make_account_gate(args)
     try:
         manager = WorkerManager(
             runtime,
@@ -155,19 +160,31 @@ def cmd_worker(args: argparse.Namespace) -> int:
             slots=args.slots,
             dry_run=args.dry_run,
             agent_command=args.agent_command,
+            agent_preset=args.agent,
+            codex_model=args.codex_model,
+            codex_sandbox=args.codex_sandbox,
+            codex_profile=args.codex_profile,
+            codex_extra_args=args.codex_extra_args,
             tick_interval=args.tick_interval,
             use_worktrees=args.worktrees,
             repo_root=args.repo_root,
             worktree_root=args.worktree_root,
+            account_gate=account_gate,
+            account_gated_lanes=parse_csv(args.account_gated_lanes),
+            account_gate_ttl_sec=args.account_gate_ttl,
+            parallel=args.parallel,
         )
-        manager.run(once=args.once, max_ticks=args.max_ticks)
+        manager.run(once=args.once, max_ticks=args.max_ticks, exit_when_idle=args.exit_when_idle)
     finally:
+        if account_gate is not None:
+            account_gate.close()
         runtime.close()
     return 0
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     runtime = runtime_for(args.run_root, args.run_id)
+    account_gate = make_account_gate(args)
     try:
         lanes = [lane.strip() for lane in args.lanes.split(",") if lane.strip()]
         managers = [
@@ -178,10 +195,19 @@ def cmd_run(args: argparse.Namespace) -> int:
                 slots=args.slots,
                 dry_run=args.dry_run,
                 agent_command=args.agent_command,
+                agent_preset=args.agent,
+                codex_model=args.codex_model,
+                codex_sandbox=args.codex_sandbox,
+                codex_profile=args.codex_profile,
+                codex_extra_args=args.codex_extra_args,
                 tick_interval=args.tick_interval,
                 use_worktrees=args.worktrees,
                 repo_root=args.repo_root,
                 worktree_root=args.worktree_root,
+                account_gate=account_gate,
+                account_gated_lanes=parse_csv(args.account_gated_lanes),
+                account_gate_ttl_sec=args.account_gate_ttl,
+                parallel=args.parallel,
             )
             for lane in lanes
         ]
@@ -202,10 +228,14 @@ def cmd_run(args: argparse.Namespace) -> int:
                 started += summary["started"]
                 completed += summary["completed"]
             print(f"tick={tick} started={started} completed={completed}")
+            if args.exit_when_idle and all(manager.is_idle() for manager in managers):
+                break
             if args.once or (args.max_ticks is not None and tick >= args.max_ticks):
                 break
             time.sleep(args.tick_interval)
     finally:
+        if account_gate is not None:
+            account_gate.close()
         runtime.close()
     return 0
 
@@ -237,6 +267,253 @@ def cmd_drain(args: argparse.Namespace) -> int:
     return _set_status(args, "draining")
 
 
+def cmd_account_init(args: argparse.Namespace) -> int:
+    gate = make_standalone_account_gate(args)
+    try:
+        if args.resources_json:
+            gate.configure_resources(load_resource_config(args.resources_json), replace=True)
+        summary = gate.status_summary()
+    finally:
+        gate.close()
+    print(f"Initialized account gate {summary['account_id']}")
+    print(f"Gate database: {summary['db_path']}")
+    print("Resources:")
+    for resource in summary["resources"]:
+        print(f"  {resource['resource']:<16} max={resource['max_slots']}")
+    return 0
+
+
+def cmd_account_status(args: argparse.Namespace) -> int:
+    gate = make_standalone_account_gate(args)
+    try:
+        summary = gate.status_summary()
+    finally:
+        gate.close()
+    if args.json:
+        print(json.dumps(summary, indent=2))
+        return 0
+    print(f"SMI account gate: {summary['account_id']}")
+    print(f"Gate database   : {summary['db_path']}")
+    print("Resources:")
+    for resource in summary["resources"]:
+        permits = resource["permits"]
+        active = permits.get("active", 0)
+        print(f"  {resource['resource']:<16} active={active} max={resource['max_slots']}")
+    if summary["active_permits"]:
+        print("Active permits:")
+        for permit in summary["active_permits"]:
+            print(
+                f"  {permit['permit_id']} {permit['resource']} "
+                f"holder={permit['holder']} expires={permit['expires_at']}"
+            )
+    return 0
+
+
+def cmd_account_state(args: argparse.Namespace) -> int:
+    gate = make_standalone_account_gate(args)
+    try:
+        json_path, markdown_path = account_state_paths(gate)
+    finally:
+        gate.close()
+    if args.path:
+        print(json_path if args.format == "json" else markdown_path)
+        return 0
+    path = json_path if args.format == "json" else markdown_path
+    if not path.exists():
+        print(f"No account state snapshot found at {path}", file=sys.stderr)
+        return 1
+    print(path.read_text(encoding="utf-8"), end="")
+    return 0
+
+
+def cmd_account_release(args: argparse.Namespace) -> int:
+    gate = make_standalone_account_gate(args)
+    try:
+        released = gate.release(args.permit_id)
+    finally:
+        gate.close()
+    if released:
+        print(f"Released permit {args.permit_id}")
+        return 0
+    print(f"No active permit found for {args.permit_id}")
+    return 1
+
+
+def cmd_account_watch(args: argparse.Namespace) -> int:
+    gate = make_standalone_account_gate(args)
+    try:
+        if args.resources_json:
+            gate.configure_resources(load_resource_config(args.resources_json), replace=True)
+        runner = (
+            AccountClusterRunner(gate, cluster_config=args.cluster_config)
+            if args.touch_sessions or args.queue_snapshot
+            else None
+        )
+        touch_clusters = parse_csv(args.clusters)
+        if runner is not None and not touch_clusters:
+            touch_clusters = set((runner.config.get("clusters") or {}).keys())
+        tick = 0
+        while True:
+            tick += 1
+            expired = gate.reap_expired()
+            summary = gate.status_summary()
+            touch_results = []
+            if runner is not None:
+                if args.touch_sessions:
+                    touch_results = runner.touch_sessions(
+                        sorted(touch_clusters),
+                        open_if_missing=args.open_if_missing,
+                        touch_command=args.touch_command,
+                    )
+                queue_results = (
+                    runner.queue_snapshot(sorted(touch_clusters), limit=args.queue_limit) if args.queue_snapshot else []
+                )
+            else:
+                queue_results = []
+            state_paths = write_account_state(gate, summary, touch_results=touch_results, queue_results=queue_results)
+            if args.json:
+                print(
+                    json.dumps(
+                        {
+                            "tick": tick,
+                            "expired": expired,
+                            "state_file": str(state_paths[0]),
+                            "touch_results": touch_results,
+                            "queue_results": queue_results,
+                            **summary,
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
+            else:
+                resource_bits = []
+                for resource in summary["resources"]:
+                    active = resource["permits"].get("active", 0)
+                    resource_bits.append(f"{resource['resource']}={active}/{resource['max_slots']}")
+                print(
+                    f"tick={tick} account={summary['account_id']} expired={expired} "
+                    + " ".join(resource_bits)
+                    + f" state={state_paths[0]}",
+                    flush=True,
+                )
+                for result in touch_results:
+                    status = "ok" if result.get("ok") else "failed"
+                    if result.get("skipped"):
+                        status = "skipped"
+                    print(f"  touch {result.get('cluster')}: {status}", flush=True)
+                for result in queue_results:
+                    status = "ok" if result.get("ok") else "failed"
+                    if result.get("skipped"):
+                        status = "skipped"
+                    parsed = result.get("parsed") or {}
+                    print(
+                        f"  queue {result.get('cluster')}: {status} "
+                        f"squeue={len(parsed.get('squeue', []))} sacct={len(parsed.get('sacct', []))}",
+                        flush=True,
+                    )
+            if args.once:
+                break
+            time.sleep(args.interval)
+    finally:
+        gate.close()
+    return 0
+
+
+def cmd_account_cluster_smoke(args: argparse.Namespace) -> int:
+    gate = make_standalone_account_gate(args)
+    try:
+        if args.resources_json:
+            gate.configure_resources(load_resource_config(args.resources_json), replace=True)
+    finally:
+        gate.close()
+
+    clusters = sorted(parse_csv(args.clusters))
+    if not clusters:
+        raise ValueError("--clusters must name at least one cluster")
+    if args.serial or len(clusters) == 1:
+        results = [run_account_cluster_smoke_one(args, cluster_name) for cluster_name in clusters]
+    else:
+        workers = args.max_workers or len(clusters)
+        results_by_cluster = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(run_account_cluster_smoke_one, args, cluster_name): cluster_name
+                for cluster_name in clusters
+            }
+            for future in concurrent.futures.as_completed(futures):
+                cluster_name = futures[future]
+                try:
+                    results_by_cluster[cluster_name] = future.result()
+                except Exception as exc:
+                    results_by_cluster[cluster_name] = {"ok": False, "cluster": cluster_name, "error": str(exc)}
+        results = [results_by_cluster[cluster_name] for cluster_name in clusters]
+
+    if args.json:
+        print(json.dumps(results, indent=2, sort_keys=True))
+    else:
+        for result in results:
+            status = "ok" if result["ok"] else "failed"
+            if "error" in result:
+                print(f"{status} {result['cluster']} error={result['error']}")
+                continue
+            print(
+                f"{status} {result['cluster']} job={result['job_id']} "
+                f"state={result['final_state']['state']} local={result['local_dir']}"
+            )
+    return 0 if all(result["ok"] for result in results) else 1
+
+
+def run_account_cluster_smoke_one(args: argparse.Namespace, cluster_name: str) -> dict[str, Any]:
+    gate = make_standalone_account_gate(args)
+    try:
+        runner = AccountClusterRunner(gate, cluster_config=args.cluster_config)
+        return runner.run_smoke_job(
+            cluster_name,
+            label=args.label,
+            local_output_dir=args.local_output_dir,
+            remote_dir=args.remote_dir,
+            profile=args.profile,
+            sbatch_args=args.sbatch_args or [],
+            poll_interval=args.poll_interval,
+            timeout_sec=args.timeout,
+            open_if_missing=args.open_if_missing,
+        )
+    finally:
+        gate.close()
+
+
+def cmd_agent_cluster_smoke(args: argparse.Namespace) -> int:
+    raw_prompt = sys.stdin.read()
+    try:
+        payload = json.loads(raw_prompt)
+    except json.JSONDecodeError as exc:
+        print(f"error: cluster-smoke agent prompt must be JSON: {exc}", file=sys.stderr)
+        return 2
+
+    gate = make_agent_account_gate(args)
+    try:
+        runner = AccountClusterRunner(gate, cluster_config=args.cluster_config)
+        result = runner.run_smoke_job(
+            payload["cluster"],
+            label=payload.get("label", args.label),
+            local_output_dir=payload.get("local_output_dir", args.local_output_dir),
+            remote_dir=payload.get("remote_dir"),
+            profile=payload.get("profile", args.profile),
+            sbatch_args=payload.get("sbatch_args", args.sbatch_args or []),
+            poll_interval=float(payload.get("poll_interval", args.poll_interval)),
+            timeout_sec=float(payload.get("timeout", args.timeout)),
+            open_if_missing=bool(payload.get("open_if_missing", args.open_if_missing)),
+            run_id=os.environ.get("SMI_RUN_ID"),
+            task_id=os.environ.get("SMI_TASK_ID"),
+            slot_id=os.environ.get("SMI_SLOT_ID"),
+        )
+    finally:
+        gate.close()
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result["ok"] else 1
+
+
 def _set_status(args: argparse.Namespace, status: str) -> int:
     runtime = runtime_for(args.run_root, args.run_id)
     try:
@@ -245,6 +522,124 @@ def _set_status(args: argparse.Namespace, status: str) -> int:
         runtime.close()
     print(f"Run {args.run_id}: {status}")
     return 0
+
+
+def parse_csv(value: str | None) -> set[str]:
+    return {item.strip() for item in (value or "").split(",") if item.strip()}
+
+
+def make_account_gate(args: argparse.Namespace) -> AccountGate | None:
+    account_id = getattr(args, "account_gate_id", None)
+    if not account_id:
+        return None
+    root = getattr(args, "account_gate_root", None) or args.run_root
+    return AccountGate(account_id, account_gate_path(root, account_id))
+
+
+def make_standalone_account_gate(args: argparse.Namespace) -> AccountGate:
+    root = args.account_root or args.run_root
+    return AccountGate(args.account_id, account_gate_path(root, args.account_id))
+
+
+def make_agent_account_gate(args: argparse.Namespace) -> AccountGate:
+    root = args.account_root or args.run_root
+    return AccountGate(args.account_id, account_gate_path(root, args.account_id))
+
+
+def account_state_paths(gate: AccountGate) -> tuple[Path, Path]:
+    directory = gate.db_path.parent
+    return directory / "account_state.json", directory / "account_state.md"
+
+
+def write_account_state(
+    gate: AccountGate,
+    summary: dict[str, Any],
+    *,
+    touch_results: list[dict[str, Any]],
+    queue_results: list[dict[str, Any]],
+) -> tuple[Path, Path]:
+    json_path, markdown_path = account_state_paths(gate)
+    state = {
+        "updated_at": utc_now(),
+        "account_id": summary["account_id"],
+        "db_path": summary["db_path"],
+        "resources": summary["resources"],
+        "active_permits": summary["active_permits"],
+        "touch_results": touch_results,
+        "queue_results": queue_results,
+    }
+    json_tmp = json_path.with_suffix(".json.tmp")
+    json_tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    json_tmp.replace(json_path)
+
+    lines = [
+        f"# SMI Account State: {summary['account_id']}",
+        "",
+        f"Updated: {state['updated_at']}",
+        "",
+        "## Lanes",
+        "",
+        "| resource | active | max |",
+        "| --- | ---: | ---: |",
+    ]
+    for resource in summary["resources"]:
+        lines.append(
+            f"| {resource['resource']} | {resource['permits'].get('active', 0)} | {resource['max_slots']} |"
+        )
+    if summary["active_permits"]:
+        lines.extend(["", "## Active Permits", ""])
+        for permit in summary["active_permits"]:
+            lines.append(
+                f"- `{permit['permit_id']}` `{permit['resource']}` holder=`{permit['holder']}` expires=`{permit['expires_at']}`"
+            )
+    if queue_results:
+        lines.extend(["", "## Cluster Queues", ""])
+        for result in queue_results:
+            parsed = result.get("parsed") or {}
+            lines.append(f"### {result.get('cluster')}")
+            if result.get("skipped"):
+                lines.append(f"- skipped: {result.get('error')}")
+                continue
+            if not result.get("ok"):
+                lines.append("- queue snapshot failed")
+                continue
+            squeue = parsed.get("squeue", [])
+            sacct = parsed.get("sacct", [])
+            lines.append(f"- squeue rows: {len(squeue)}")
+            lines.append(f"- sacct rows: {len(sacct)}")
+            for row in squeue[:10]:
+                lines.append(f"- queued/running `{row.get('job_id')}` `{row.get('state')}` `{row.get('name')}`")
+            for row in sacct[-10:]:
+                lines.append(f"- recent `{row.get('job_id')}` `{row.get('state')}` `{row.get('name')}`")
+    markdown_tmp = markdown_path.with_suffix(".md.tmp")
+    markdown_tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    markdown_tmp.replace(markdown_path)
+    return json_path, markdown_path
+
+
+def add_agent_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--agent", choices=SUPPORTED_AGENT_PRESETS, help="Named agent preset for workers.")
+    parser.add_argument("--agent-command", help="Explicit command to launch; overrides --agent.")
+    parser.add_argument("--codex-model", help="Model passed to `codex exec --model`.")
+    parser.add_argument("--codex-sandbox", help="Sandbox passed to `codex exec --sandbox`.")
+    parser.add_argument("--codex-profile", help="Profile passed to `codex exec --profile`.")
+    parser.add_argument("--codex-extra-args", help="Additional shell-style arguments passed to `codex exec`.")
+
+
+def add_account_gate_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--account-gate-id", help="Shared account gate id, for example drac-fouquet.")
+    parser.add_argument("--account-gate-root", help="Directory holding SMI_account_* gate databases.")
+    parser.add_argument(
+        "--account-gated-lanes",
+        default="remote_transfer,remote_submit,remote_monitor,remote_cluster",
+        help="Comma-separated lanes that must acquire shared account permits.",
+    )
+    parser.add_argument("--account-gate-ttl", type=int, default=14_400, help="Account permit TTL in seconds.")
+
+
+def add_account_identity_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--account-id", required=True)
+    parser.add_argument("--account-root", help="Directory holding SMI_account_* state.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -277,13 +672,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lane", default="fast_local")
     p.add_argument("--slots", type=int, default=1)
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--agent-command")
+    add_agent_args(p)
     p.add_argument("--tick-interval", type=float, default=2.0)
     p.add_argument("--once", action="store_true")
     p.add_argument("--max-ticks", type=int)
+    p.add_argument("--parallel", action="store_true", help="Launch and supervise subprocesses concurrently per slot.")
+    p.add_argument("--exit-when-idle", action="store_true", help="Exit when this lane has no ready/running work.")
     p.add_argument("--worktrees", action="store_true", help="Run workers in per-slot git worktrees.")
     p.add_argument("--repo-root", help="Repository root for worktree isolation.")
     p.add_argument("--worktree-root", help="Directory for SMI worktrees.")
+    add_account_gate_args(p)
     p.set_defaults(func=cmd_worker)
 
     p = sub.add_parser("run", help="Run order watcher and workers in one loop.")
@@ -291,13 +689,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lanes", default="fast_local")
     p.add_argument("--slots", type=int, default=1)
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--agent-command")
+    add_agent_args(p)
     p.add_argument("--tick-interval", type=float, default=2.0)
     p.add_argument("--once", action="store_true")
     p.add_argument("--max-ticks", type=int)
+    p.add_argument("--parallel", action="store_true", help="Launch and supervise subprocesses concurrently per slot.")
+    p.add_argument("--exit-when-idle", action="store_true", help="Exit when selected lanes have no ready/running work.")
     p.add_argument("--worktrees", action="store_true", help="Run workers in per-slot git worktrees.")
     p.add_argument("--repo-root", help="Repository root for worktree isolation.")
     p.add_argument("--worktree-root", help="Directory for SMI worktrees.")
+    add_account_gate_args(p)
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("router", help="Review and merge SMI worktree branches.")
@@ -328,6 +729,73 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("drain")
     p.add_argument("--run-id", required=True)
     p.set_defaults(func=cmd_drain)
+
+    p = sub.add_parser("account", help="Manage a shared account gate for multiple SMI project runs.")
+    account_sub = p.add_subparsers(dest="account_command", required=True)
+    p_init = account_sub.add_parser("init", help="Initialize or update account gate resources.")
+    add_account_identity_args(p_init)
+    p_init.add_argument("--resources-json", help="Resource config JSON; lane-style max_slots files are accepted.")
+    p_init.set_defaults(func=cmd_account_init)
+    p_status = account_sub.add_parser("status", help="Show account gate permit usage.")
+    add_account_identity_args(p_status)
+    p_status.add_argument("--json", action="store_true")
+    p_status.set_defaults(func=cmd_account_status)
+    p_state = account_sub.add_parser("state", help="Read the visible account state snapshot.")
+    add_account_identity_args(p_state)
+    p_state.add_argument("--format", choices=("json", "markdown"), default="json")
+    p_state.add_argument("--path", action="store_true", help="Print the state snapshot path only.")
+    p_state.set_defaults(func=cmd_account_state)
+    p_release = account_sub.add_parser("release", help="Manually release a stuck active permit.")
+    add_account_identity_args(p_release)
+    p_release.add_argument("--permit-id", required=True)
+    p_release.set_defaults(func=cmd_account_release)
+    p_watch = account_sub.add_parser("watch", help="Run an always-on account gate monitor.")
+    add_account_identity_args(p_watch)
+    p_watch.add_argument("--resources-json", help="Resource config JSON to apply before watching.")
+    p_watch.add_argument("--interval", type=float, default=60.0, help="Seconds between account gate monitor ticks.")
+    p_watch.add_argument("--once", action="store_true", help="Run one monitor tick and exit.")
+    p_watch.add_argument("--json", action="store_true", help="Emit one JSON object per monitor tick.")
+    p_watch.add_argument("--touch-sessions", action="store_true", help="Touch configured cluster SSH sessions each tick.")
+    p_watch.add_argument("--queue-snapshot", action="store_true", help="Refresh local squeue/sacct snapshots each tick.")
+    p_watch.add_argument("--cluster-config", default="config/clusters.json", help="Cluster config used for session touches.")
+    p_watch.add_argument("--clusters", help="Comma-separated clusters to touch. Defaults to all configured clusters.")
+    p_watch.add_argument("--queue-limit", type=int, default=40, help="Maximum squeue/sacct rows per cluster snapshot.")
+    p_watch.add_argument("--touch-command", default="true", help="Remote command used to touch sessions.")
+    p_watch.add_argument("--open-if-missing", action="store_true", help="Open SSH ControlMaster sessions when missing.")
+    p_watch.set_defaults(func=cmd_account_watch)
+
+    p_smoke = account_sub.add_parser("cluster-smoke", help="Run and harvest small SLURM smoke jobs through the account gate.")
+    add_account_identity_args(p_smoke)
+    p_smoke.add_argument("--resources-json", help="Resource config JSON to apply before running.")
+    p_smoke.add_argument("--cluster-config", default="config/clusters.json")
+    p_smoke.add_argument("--clusters", required=True, help="Comma-separated cluster names.")
+    p_smoke.add_argument("--label", required=True, help="Remote/local label for this smoke run.")
+    p_smoke.add_argument("--local-output-dir", required=True, help="Local directory for harvested outputs and summaries.")
+    p_smoke.add_argument("--remote-dir", help="Remote base directory. Defaults to cluster remote_project_dir.")
+    p_smoke.add_argument("--profile", help="Cluster sbatch profile.")
+    p_smoke.add_argument("--sbatch-args", nargs="*", help="Additional sbatch flags.")
+    p_smoke.add_argument("--poll-interval", type=float, default=10.0)
+    p_smoke.add_argument("--timeout", type=float, default=900.0)
+    p_smoke.add_argument("--open-if-missing", action="store_true")
+    p_smoke.add_argument("--serial", action="store_true", help="Run clusters one at a time instead of concurrently.")
+    p_smoke.add_argument("--max-workers", type=int, help="Maximum concurrent cluster workflows.")
+    p_smoke.add_argument("--json", action="store_true")
+    p_smoke.set_defaults(func=cmd_account_cluster_smoke)
+
+    p = sub.add_parser("agent", help="Small deterministic agents for SMI worker integration tests.")
+    agent_sub = p.add_subparsers(dest="agent_command", required=True)
+    p_agent_smoke = agent_sub.add_parser("cluster-smoke", help="Read a JSON prompt and run a cluster smoke job.")
+    p_agent_smoke.add_argument("--account-id", required=True)
+    p_agent_smoke.add_argument("--account-root", help="Directory holding SMI_account_* state.")
+    p_agent_smoke.add_argument("--cluster-config", default="config/clusters.json")
+    p_agent_smoke.add_argument("--label", default="smi-agent-smoke")
+    p_agent_smoke.add_argument("--local-output-dir", default="runs/smi-agent-smoke")
+    p_agent_smoke.add_argument("--profile", help="Cluster sbatch profile.")
+    p_agent_smoke.add_argument("--sbatch-args", nargs="*", help="Additional sbatch flags.")
+    p_agent_smoke.add_argument("--poll-interval", type=float, default=10.0)
+    p_agent_smoke.add_argument("--timeout", type=float, default=900.0)
+    p_agent_smoke.add_argument("--open-if-missing", action="store_true")
+    p_agent_smoke.set_defaults(func=cmd_agent_cluster_smoke)
     return parser
 
 

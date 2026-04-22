@@ -1,0 +1,31 @@
+SystemName          water smoke
+SystemLabel         water
+NumberOfAtoms       3
+NumberOfSpecies     2
+
+%block ChemicalSpeciesLabel
+ 1  1  H
+ 2  8  O
+%endblock ChemicalSpeciesLabel
+
+XC.functional       GGA
+XC.authors          PBE
+MeshCutoff          50 Ry
+PAO.BasisSize       SZ
+PAO.EnergyShift     0.02 Ry
+MaxSCFIterations    50
+DM.Tolerance        1.d-4
+
+AtomicCoordinatesFormat Ang
+
+%block LatticeVectors
+ 12.000000  0.000000  0.000000
+  0.000000 12.000000  0.000000
+  0.000000  0.000000 12.000000
+%endblock LatticeVectors
+
+%block AtomicCoordinatesAndAtomicSpecies
+  0.000000  0.000000  0.000000  2
+  0.758602  0.000000  0.504284  1
+ -0.758602  0.000000  0.504284  1
+%endblock AtomicCoordinatesAndAtomicSpecies

@@ -1,0 +1,27 @@
+&control
+  calculation = 'scf'
+  prefix = 'h2'
+  pseudo_dir = './pseudo'
+  outdir = './tmp'
+/
+&system
+  ibrav = 0
+  nat = 2
+  ntyp = 1
+  ecutwfc = 20.0
+  occupations = 'fixed'
+/
+&electrons
+  conv_thr = 1.0d-7
+  electron_maxstep = 40
+/
+ATOMIC_SPECIES
+ H 1.008 H.upf
+ATOMIC_POSITIONS angstrom
+ H 0.000000 0.000000 0.000000
+ H 0.740000 0.000000 0.000000
+K_POINTS gamma
+CELL_PARAMETERS angstrom
+ 8.000000 0.000000 0.000000
+ 0.000000 8.000000 0.000000
+ 0.000000 0.000000 8.000000

@@ -1,0 +1,26 @@
+{
+  "fast_local": {
+    "max_slots": 4,
+    "description": "Parallel local Codex/agent tasks for short project work."
+  },
+  "heavy_local": {
+    "max_slots": 1,
+    "description": "Longer local project work that should not overlap heavily."
+  },
+  "verify_local": {
+    "max_slots": 1,
+    "description": "Project-local validation and review lane."
+  },
+  "remote_transfer": {
+    "max_slots": 1,
+    "description": "Project-local staging and harvest lane. Use --account-gate-id to also acquire the shared account transfer permit."
+  },
+  "remote_submit": {
+    "max_slots": 1,
+    "description": "Project-local submit/session lane. Use --account-gate-id to also acquire the shared account submit permit."
+  },
+  "remote_monitor": {
+    "max_slots": 1,
+    "description": "Project-local scheduler/output polling lane. Use --account-gate-id to also acquire the shared account monitor permit."
+  }
+}

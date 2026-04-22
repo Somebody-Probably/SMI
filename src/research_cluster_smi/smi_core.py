@@ -356,6 +356,39 @@ class SMIRuntime:
                 return row
         return None
 
+    def _release_unblocked_tasks(self, run_id: str, now: str | None = None) -> list[str]:
+        """Move blocked tasks to ready once all dependencies completed."""
+        now = now or utc_now()
+        rows = self.conn.execute(
+            """
+            SELECT task_id, dependencies_json FROM tasks
+            WHERE run_id=? AND status='blocked'
+            ORDER BY created_at ASC
+            """,
+            (run_id,),
+        ).fetchall()
+        released: list[str] = []
+        for row in rows:
+            dependencies = json.loads(row["dependencies_json"] or "[]")
+            if not dependencies:
+                ready = True
+            else:
+                completed_count = self.conn.execute(
+                    """
+                    SELECT COUNT(*) FROM tasks
+                    WHERE run_id=? AND task_id IN ({}) AND status='completed'
+                    """.format(",".join("?" for _ in dependencies)),
+                    (run_id, *dependencies),
+                ).fetchone()[0]
+                ready = completed_count == len(set(dependencies))
+            if ready:
+                self.conn.execute(
+                    "UPDATE tasks SET status='ready', updated_at=? WHERE run_id=? AND task_id=?",
+                    (now, run_id, row["task_id"]),
+                )
+                released.append(row["task_id"])
+        return released
+
     def claim_next_task(self, run_id: str, slot_id: str) -> Assignment | None:
         with self.conn:
             slot = self.conn.execute(
@@ -490,6 +523,7 @@ class SMIRuntime:
                 "UPDATE slots SET status='idle', current_lease_id=NULL, last_heartbeat_at=? WHERE run_id=? AND slot_id=?",
                 (now, run_id, row["slot_id"]),
             )
+            released = self._release_unblocked_tasks(run_id, now)
         self.publish_event(
             "attempt.completed",
             run_id,
@@ -499,6 +533,8 @@ class SMIRuntime:
             slot_id=row["slot_id"],
             payload=result or {},
         )
+        for task_id in released:
+            self.publish_event("task.unblocked", run_id, task_id=task_id)
 
     def fail_attempt(
         self,
@@ -584,4 +620,3 @@ def run_dir_for(run_root: str | Path, run_id: str) -> Path:
 def runtime_for(run_root: str | Path, run_id: str) -> SMIRuntime:
     rd = run_dir_for(run_root, run_id)
     return SMIRuntime(rd / "run.db", rd)
-

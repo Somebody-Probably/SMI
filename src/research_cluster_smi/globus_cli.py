@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -74,13 +75,35 @@ def transfer_plan(config: dict[str, Any], name: str | None) -> dict[str, Any]:
     }
 
 
+def globus_command() -> str | None:
+    """Return a runnable Globus CLI path from PATH or the active virtualenv."""
+
+    found = shutil.which("globus")
+    if found:
+        return found
+    candidates = []
+    if os.environ.get("VIRTUAL_ENV"):
+        candidates.append(Path(os.environ["VIRTUAL_ENV"]) / "bin" / "globus")
+    candidates.append(Path(sys.executable).parent / "globus")
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def globus_available() -> bool:
-    return shutil.which("globus") is not None
+    return globus_command() is not None
 
 
-def build_transfer_command(plan: dict[str, Any], *, label: str | None = None, recursive: bool | None = None) -> list[str]:
+def build_transfer_command(
+    plan: dict[str, Any],
+    *,
+    label: str | None = None,
+    recursive: bool | None = None,
+    executable: str = "globus",
+) -> list[str]:
     command = [
-        "globus",
+        executable,
         "transfer",
         f"{plan['source_endpoint']}:{plan['source_path']}",
         f"{plan['destination_endpoint']}:{plan['destination_path']}",
@@ -113,13 +136,14 @@ def append_record(path: str | Path, record: dict[str, Any]) -> None:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
+    command = globus_command()
     print("Globus doctor")
-    print(f"globus: {shutil.which('globus') or 'missing'}")
-    if not globus_available():
+    print(f"globus: {command or 'missing'}")
+    if command is None:
         print("Install with: python -m pip install globus-cli", file=sys.stderr)
         return 1
     if args.check_login:
-        result = subprocess.run(["globus", "whoami"], text=True, capture_output=True, check=False)
+        result = subprocess.run([command, "whoami"], text=True, capture_output=True, check=False)
         if result.returncode == 0:
             print(f"whoami: {result.stdout.strip()}")
             return 0
@@ -138,12 +162,14 @@ def cmd_plan(args: argparse.Namespace) -> int:
 def cmd_submit(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     plan = transfer_plan(config, args.transfer)
-    command = build_transfer_command(plan, label=args.label, recursive=args.recursive)
+    globus = globus_command()
+    executable = "globus" if args.dry_run else globus
+    if executable is None:
+        raise RuntimeError("globus CLI is not installed.")
+    command = build_transfer_command(plan, label=args.label, recursive=args.recursive, executable=executable)
     if args.dry_run:
         print(" ".join(command))
         return 0
-    if not globus_available():
-        raise RuntimeError("globus CLI is not installed.")
     response = run_json_command(command)
     record = {"plan": plan, "response": response}
     append_record(args.record, record)
@@ -152,7 +178,11 @@ def cmd_submit(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    command = ["globus", "task", "show", args.task_id, "--format", "json"]
+    globus = globus_command()
+    executable = "globus" if args.dry_run else globus
+    if executable is None:
+        raise RuntimeError("globus CLI is not installed.")
+    command = [executable, "task", "show", args.task_id, "--format", "json"]
     if args.dry_run:
         print(" ".join(command))
         return 0
@@ -162,7 +192,11 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_wait(args: argparse.Namespace) -> int:
-    command = ["globus", "task", "wait", args.task_id, "--timeout", str(args.timeout)]
+    globus = globus_command()
+    executable = "globus" if args.dry_run else globus
+    if executable is None:
+        raise RuntimeError("globus CLI is not installed.")
+    command = [executable, "task", "wait", args.task_id, "--timeout", str(args.timeout)]
     if args.dry_run:
         print(" ".join(command))
         return 0
@@ -217,4 +251,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -1,0 +1,18 @@
+{
+  "remote_transfer": {
+    "max_slots": 1,
+    "description": "Always-on account budget for cluster rsync/scp/Globus staging and harvest tasks."
+  },
+  "remote_submit": {
+    "max_slots": 1,
+    "description": "Always-on account budget for sbatch/session-touch/account-state tasks."
+  },
+  "remote_monitor": {
+    "max_slots": 2,
+    "description": "Always-on account budget for lightweight squeue/sacct and output-health polling."
+  },
+  "remote_cluster": {
+    "max_slots": 1,
+    "description": "Compatibility budget for older all-in-one remote calculation-management tasks."
+  }
+}

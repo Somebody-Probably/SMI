@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python3 -m research_cluster_smi.globus_cli "$@"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/.." && pwd)"
+export PYTHONPATH="${repo_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
+python3 -m research_cluster_smi.globus_cli "$@"
