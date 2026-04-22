@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .orders import OrderWatcher
+from .router import Router
 from .smi_core import DEFAULT_LANES, runtime_for, run_dir_for
 from .worker import WorkerManager
 
@@ -155,6 +156,9 @@ def cmd_worker(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             agent_command=args.agent_command,
             tick_interval=args.tick_interval,
+            use_worktrees=args.worktrees,
+            repo_root=args.repo_root,
+            worktree_root=args.worktree_root,
         )
         manager.run(once=args.once, max_ticks=args.max_ticks)
     finally:
@@ -175,6 +179,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 dry_run=args.dry_run,
                 agent_command=args.agent_command,
                 tick_interval=args.tick_interval,
+                use_worktrees=args.worktrees,
+                repo_root=args.repo_root,
+                worktree_root=args.worktree_root,
             )
             for lane in lanes
         ]
@@ -201,6 +208,21 @@ def cmd_run(args: argparse.Namespace) -> int:
     finally:
         runtime.close()
     return 0
+
+
+def cmd_router(args: argparse.Namespace) -> int:
+    router = Router(args.repo_root)
+    if args.router_command == "list":
+        branches = router.pending_branches(args.run_id)
+        print(Router.format_pending(branches, json_output=args.json))
+        return 0
+    if args.router_command == "plan":
+        print(json.dumps(router.merge_plan(args.branch, args.base), indent=2))
+        return 0
+    if args.router_command == "merge":
+        print(json.dumps(router.merge_branch(args.branch, base=args.base, dry_run=args.dry_run), indent=2))
+        return 0
+    raise ValueError(f"Unknown router command: {args.router_command}")
 
 
 def cmd_pause(args: argparse.Namespace) -> int:
@@ -259,6 +281,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tick-interval", type=float, default=2.0)
     p.add_argument("--once", action="store_true")
     p.add_argument("--max-ticks", type=int)
+    p.add_argument("--worktrees", action="store_true", help="Run workers in per-slot git worktrees.")
+    p.add_argument("--repo-root", help="Repository root for worktree isolation.")
+    p.add_argument("--worktree-root", help="Directory for SMI worktrees.")
     p.set_defaults(func=cmd_worker)
 
     p = sub.add_parser("run", help="Run order watcher and workers in one loop.")
@@ -270,7 +295,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tick-interval", type=float, default=2.0)
     p.add_argument("--once", action="store_true")
     p.add_argument("--max-ticks", type=int)
+    p.add_argument("--worktrees", action="store_true", help="Run workers in per-slot git worktrees.")
+    p.add_argument("--repo-root", help="Repository root for worktree isolation.")
+    p.add_argument("--worktree-root", help="Directory for SMI worktrees.")
     p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("router", help="Review and merge SMI worktree branches.")
+    p.add_argument("--repo-root", default=".")
+    router_sub = p.add_subparsers(dest="router_command", required=True)
+    p_list = router_sub.add_parser("list", help="List pending SMI branches.")
+    p_list.add_argument("--run-id")
+    p_list.add_argument("--json", action="store_true")
+    p_list.set_defaults(func=cmd_router)
+    p_plan = router_sub.add_parser("plan", help="Show a merge plan for a branch.")
+    p_plan.add_argument("branch")
+    p_plan.add_argument("--base", default="HEAD")
+    p_plan.set_defaults(func=cmd_router)
+    p_merge = router_sub.add_parser("merge", help="Cherry-pick a reviewed SMI branch.")
+    p_merge.add_argument("branch")
+    p_merge.add_argument("--base", default="HEAD")
+    p_merge.add_argument("--dry-run", action="store_true")
+    p_merge.set_defaults(func=cmd_router)
 
     p = sub.add_parser("pause")
     p.add_argument("--run-id", required=True)

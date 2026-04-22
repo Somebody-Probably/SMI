@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from .smi_core import SMIRuntime
+from .worktree import WorktreeManager, find_repo_root
 
 
 class WorkerManager:
@@ -25,6 +26,9 @@ class WorkerManager:
         dry_run: bool = False,
         agent_command: str | None = None,
         tick_interval: float = 2.0,
+        use_worktrees: bool = False,
+        repo_root: str | None = None,
+        worktree_root: str | None = None,
     ) -> None:
         self.runtime = runtime
         self.run_id = run_id
@@ -34,6 +38,10 @@ class WorkerManager:
         self.agent_command = agent_command or os.environ.get("SMI_AGENT_COMMAND", "claude --print")
         self.tick_interval = tick_interval
         self.slot_ids = [f"{lane}-{index:02d}" for index in range(slots)]
+        self.worktree_manager = None
+        if use_worktrees:
+            root = Path(repo_root).resolve() if repo_root else find_repo_root()
+            self.worktree_manager = WorktreeManager(root, worktree_root)
 
     def register_slots(self) -> None:
         for slot_id in self.slot_ids:
@@ -72,6 +80,14 @@ class WorkerManager:
         result_dir = self.runtime.run_dir / "results" / task_id
         result_dir.mkdir(parents=True, exist_ok=True)
         result_path = result_dir / "result.json"
+        worker_cwd = None
+        worktree_info = None
+        if self.worktree_manager is not None:
+            worker_cwd = self.worktree_manager.ensure_worktree(self.run_id, assignment["slot_id"])
+            worktree_info = {
+                "branch": self.worktree_manager.branch_name(self.run_id, assignment["slot_id"]),
+                "path": str(worker_cwd),
+            }
 
         prompt_path = assignment.get("prompt_path")
         prompt = ""
@@ -83,6 +99,7 @@ class WorkerManager:
                 "type": "dry_run",
                 "task_id": task_id,
                 "prompt_path": prompt_path,
+                "worktree": worktree_info,
                 "message": "Dry run completed without launching an agent.",
             }
             result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
@@ -97,12 +114,18 @@ class WorkerManager:
                 text=True,
                 capture_output=True,
                 check=False,
+                cwd=worker_cwd,
             )
+            preserved = None
+            if self.worktree_manager is not None:
+                preserved = self.worktree_manager.preserve_changes(self.run_id, assignment["slot_id"], task_id).__dict__
             result = {
                 "command": command,
                 "returncode": completed.returncode,
                 "stdout": completed.stdout,
                 "stderr": completed.stderr,
+                "worktree": worktree_info,
+                "preserved_changes": preserved,
             }
             result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
             if completed.returncode == 0:
@@ -125,4 +148,3 @@ class WorkerManager:
                 retryable=True,
             )
             return False
-

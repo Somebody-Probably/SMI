@@ -18,6 +18,7 @@ dependencies = []
 research-cluster = "research_cluster_smi.cluster_cli:main"
 research-smi = "research_cluster_smi.smi_cli:main"
 research-chem = "research_cluster_smi.chem_cli:main"
+research-globus = "research_cluster_smi.globus_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -25,4 +26,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-

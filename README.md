@@ -56,13 +56,24 @@ research-cluster --config config/clusters.json status --dry-run
 
 Remove `--dry-run` only after your SSH config and cluster paths are correct.
 
+Optional transfer, isolation, and retry tools:
+
+```bash
+research-globus plan --config config/globus.example.json --transfer mac-to-cluster
+research-smi worker --run-id smoke-001 --lane fast_local --worktrees --repo-root . --dry-run --once
+research-smi router --repo-root . list --run-id smoke-001
+research-chem parse-output --program qe --output-file outputs/si.scf.out
+```
+
 ## Repository Layout
 
 - `src/research_cluster_smi/cluster_cli.py`: cluster connection, sync, submit, and status CLI.
 - `src/research_cluster_smi/chem_cli.py`: computational chemistry manifest and SMI spec helpers.
+- `src/research_cluster_smi/globus_cli.py`: Globus transfer planning and submission helpers.
 - `src/research_cluster_smi/smi_core.py`: SQLite-backed SMI run state.
 - `src/research_cluster_smi/orders.py`: JSON hot-folder order protocol.
 - `src/research_cluster_smi/worker.py`: simple local worker manager, with dry-run support.
+- `src/research_cluster_smi/worktree.py` and `router.py`: isolated agent worktrees and reviewed merge flow.
 - `config/`: researcher-editable templates.
 - `examples/`: smoke task specs, orders, and SLURM job templates.
 - `docs/`: operator notes and protocol documentation.
@@ -77,11 +88,12 @@ Included:
 - Hot-folder orders for seed, cancel, reprioritize, pause, resume, drain, and lane resizing.
 - Dry-run worker path that writes result artifacts without launching an agent.
 - QE and ORCA manifest-worker SLURM templates inspired by Cluster-FRUC-style batch management.
+- Globus transfer plans for input staging and artifact harvest.
+- Worktree isolation with router-mediated cherry-pick merging.
+- QE and ORCA output parsers with retry recommendations.
 
 Deferred:
 
 - Full QFF physics workflows.
-- Globus transfer automation.
-- Worktree isolation and router-mediated merging.
 - Cluster-side SMI worker daemons.
-- Rich chemistry output parsers and automatic retry policies.
+- Richer engine-specific parsers for Gaussian, CP2K, xTB, and custom lab pipelines.

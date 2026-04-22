@@ -1,0 +1,36 @@
+{
+  "default_transfer": "mac-to-cluster",
+  "endpoints": {
+    "macbook": {
+      "id": "YOUR_LOCAL_GLOBUS_CONNECT_PERSONAL_ENDPOINT_ID",
+      "root": "/Users/YOUR_USER/research"
+    },
+    "cluster-scratch": {
+      "id": "YOUR_CLUSTER_ENDPOINT_ID",
+      "root": "/scratch/YOUR_CLUSTER_USER/research-workspace"
+    },
+    "group-project": {
+      "id": "YOUR_PROJECT_ENDPOINT_ID",
+      "root": "/project/YOUR_GROUP/YOUR_CLUSTER_USER"
+    }
+  },
+  "transfers": {
+    "mac-to-cluster": {
+      "source": "macbook",
+      "destination": "cluster-scratch",
+      "source_path": "inputs/",
+      "destination_path": "inputs/",
+      "recursive": true,
+      "label": "SMI input staging"
+    },
+    "cluster-to-mac": {
+      "source": "cluster-scratch",
+      "destination": "macbook",
+      "source_path": "outputs/",
+      "destination_path": "outputs/",
+      "recursive": true,
+      "label": "SMI output harvest"
+    }
+  }
+}
+

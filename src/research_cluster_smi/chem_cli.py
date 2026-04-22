@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .chemistry import parse_output, result_to_json, retry_order_from_result
+
 
 PROGRAM_DEFAULTS = {
     "qe": {
@@ -122,6 +124,42 @@ def make_spec(args: argparse.Namespace) -> int:
     return 0
 
 
+def parse_output_command(args: argparse.Namespace) -> int:
+    result = parse_output(args.output_file, args.program)
+    if args.json:
+        print(result_to_json(result))
+        return 0
+    print(f"program: {result.program}")
+    print(f"completed: {result.completed}")
+    print(f"converged: {result.converged}")
+    if result.final_energy is not None:
+        print(f"final_energy: {result.final_energy} {result.final_energy_unit}")
+    for warning in result.warnings:
+        print(f"warning: {warning}")
+    for error in result.errors:
+        print(f"error: {error}")
+    print(f"retry_policy: {result.retry.policy}")
+    print(f"retryable: {result.retry.retryable}")
+    print(f"recommendation: {result.retry.prompt_hint}")
+    return 0
+
+
+def make_retry_order(args: argparse.Namespace) -> int:
+    result = parse_output(args.output_file, args.program)
+    if not result.retry.retryable and not args.force:
+        print(
+            f"No retry order written: policy={result.retry.policy}, retryable={result.retry.retryable}. "
+            "Use --force to write a review order anyway.",
+            file=sys.stderr,
+        )
+        return 1
+    order = retry_order_from_result(result, task_id=args.task_id, input_file=args.input_file, lane=args.lane)
+    write_json(args.output, order)
+    if str(args.output) != "-":
+        print(f"Wrote retry order to {args.output}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="research-chem")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -144,6 +182,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--log-dir", default="logs")
     p.add_argument("--report-dir", default="reports")
     p.set_defaults(func=make_spec)
+
+    p = sub.add_parser("parse-output", help="Parse a QE or ORCA output file and recommend follow-up action.")
+    p.add_argument("--program", choices=sorted(PROGRAM_DEFAULTS))
+    p.add_argument("--output-file", required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=parse_output_command)
+
+    p = sub.add_parser("make-retry-order", help="Create an SMI seed order from a failed chemistry output.")
+    p.add_argument("--program", choices=sorted(PROGRAM_DEFAULTS))
+    p.add_argument("--output-file", required=True)
+    p.add_argument("--input-file", required=True)
+    p.add_argument("--task-id", required=True)
+    p.add_argument("--lane", default="remote_cluster")
+    p.add_argument("--output", required=True)
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(func=make_retry_order)
     return parser
 
 
