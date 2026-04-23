@@ -222,6 +222,37 @@ def cmd_expire_leases(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def cmd_cancel_attempt(args: argparse.Namespace) -> int:
+    runtime = runtime_for(args.run_root, args.run_id)
+    try:
+        canceled = runtime.cancel_attempt(
+            args.run_id,
+            args.attempt_id,
+            diagnostics=args.diagnostics,
+            retryable=not args.no_retry,
+        )
+    finally:
+        runtime.close()
+    payload = {
+        "run_id": args.run_id,
+        "attempt_id": args.attempt_id,
+        "canceled": canceled is not None,
+        "attempt": canceled,
+    }
+    exit_code = 1 if args.fail_on_canceled and canceled is not None else 0
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return exit_code
+    if canceled is None:
+        print("No cancelable attempt found.")
+        return exit_code
+    print(
+        f"CANCELED {args.attempt_id} task={canceled['task_id']} lane={canceled['lane']} "
+        f"next_task_status={canceled['next_task_status']}"
+    )
+    return exit_code
+
+
 def cmd_seed(args: argparse.Namespace) -> int:
     runtime = runtime_for(args.run_root, args.run_id)
     try:
@@ -906,6 +937,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fail-on-expired", action="store_true", help="Exit nonzero if any lease is expired.")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_expire_leases)
+
+    p = sub.add_parser("cancel-attempt", help="Cancel one pending or running attempt.")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--attempt-id", required=True)
+    p.add_argument("--diagnostics", default="Canceled by operator.")
+    p.add_argument("--no-retry", action="store_true", help="Mark the task rejected instead of retry_ready.")
+    p.add_argument("--fail-on-canceled", action="store_true", help="Exit nonzero when the attempt is canceled.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_cancel_attempt)
 
     p = sub.add_parser("seed", help="Seed tasks from a JSON spec.")
     p.add_argument("--run-id", required=True)

@@ -304,8 +304,8 @@ class WorkerManager:
             }
             active.result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
             if returncode == 0:
-                self.runtime.complete_attempt(self.run_id, attempt_id, result=result)
-                completed_count += 1
+                if self.runtime.complete_attempt(self.run_id, attempt_id, result=result):
+                    completed_count += 1
             else:
                 self.runtime.fail_attempt(
                     self.run_id,
@@ -376,8 +376,7 @@ class WorkerManager:
             }
             result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
             if completed.returncode == 0:
-                self.runtime.complete_attempt(self.run_id, attempt_id, result=result)
-                return True
+                return self.runtime.complete_attempt(self.run_id, attempt_id, result=result)
             self.runtime.fail_attempt(
                 self.run_id,
                 attempt_id,
