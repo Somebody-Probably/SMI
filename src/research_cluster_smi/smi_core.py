@@ -822,6 +822,54 @@ class SMIRuntime:
         )
         return verification_id
 
+    def verification_records(
+        self,
+        run_id: str,
+        *,
+        task_id: str | None = None,
+        decision: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        if decision is not None and decision not in {"accepted", "rejected", "held"}:
+            raise ValueError(f"Unsupported verification decision: {decision}")
+        params: list[Any] = [run_id]
+        filters = []
+        if task_id is not None:
+            filters.append("task_id=?")
+            params.append(task_id)
+        if decision is not None:
+            filters.append("decision=?")
+            params.append(decision)
+        where = ""
+        if filters:
+            where = " AND " + " AND ".join(filters)
+        params.append(max(0, int(limit)))
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                run_id,
+                verification_id,
+                task_id,
+                attempt_id,
+                decision,
+                verifier,
+                verified_at,
+                evidence_json,
+                diagnostics
+            FROM verifications
+            WHERE run_id=?{where}
+            ORDER BY verified_at DESC, verification_id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        records = []
+        for row in rows:
+            record = dict(row)
+            record["evidence"] = json.loads(record.pop("evidence_json") or "{}")
+            records.append(record)
+        return records
+
     def pending_verification_count(self, run_id: str) -> int:
         row = self.conn.execute(
             """

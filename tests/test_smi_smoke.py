@@ -233,6 +233,53 @@ def test_smi_verify_rejects_failed_validation_command(tmp_path: Path, capsys) ->
     assert payload[0]["evidence"]["validation_command"]["returncode"] == 7
 
 
+def test_smi_verifications_lists_records(tmp_path: Path, capsys) -> None:
+    run_id = "verification-ledger"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        runtime.seed_task(run_id, "fast_local", task_id="ledger")
+        worker = WorkerManager(runtime, run_id, "fast_local", slots=1, dry_run=True)
+        worker.register_slots()
+        assert worker.tick() == {"started": 1, "completed": 1}
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "verify", "--run-id", run_id, "--json"])
+    assert rc == 0
+    verification_payload = json.loads(capsys.readouterr().out)
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "verifications", "--run-id", run_id, "--json"])
+    assert rc == 0
+    records = json.loads(capsys.readouterr().out)
+    assert len(records) == 1
+    assert records[0]["verification_id"] == verification_payload[0]["verification_id"]
+    assert records[0]["decision"] == "accepted"
+    assert records[0]["task_id"] == "ledger"
+    assert records[0]["evidence"]["expected_artifacts"] == []
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "verifications",
+            "--run-id",
+            run_id,
+            "--decision",
+            "rejected",
+            "--json",
+        ]
+    )
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "verifications", "--run-id", run_id, "--task-id", "ledger"])
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert "ACCEPTED ledger" in output
+    assert "verifier=neutral" in output
+
+
 def test_smi_releases_blocked_dependencies(tmp_path: Path) -> None:
     run_id = "deps"
     runtime = runtime_for(tmp_path, run_id)
