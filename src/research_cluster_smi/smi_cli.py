@@ -245,6 +245,7 @@ def cmd_verifications(args: argparse.Namespace) -> int:
             task_id=args.task_id,
             decision=args.decision,
             limit=args.limit,
+            latest=args.latest,
         )
     finally:
         runtime.close()
@@ -806,6 +807,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--task-id", help="Filter by task.")
     p.add_argument("--decision", choices=("accepted", "rejected", "held"), help="Filter by decision.")
     p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--latest", action="store_true", help="Show only the latest verification record for each attempt.")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_verifications)
 

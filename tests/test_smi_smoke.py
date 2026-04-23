@@ -280,6 +280,52 @@ def test_smi_verifications_lists_records(tmp_path: Path, capsys) -> None:
     assert "verifier=neutral" in output
 
 
+def test_smi_verifications_latest_collapses_rechecks(tmp_path: Path, capsys) -> None:
+    run_id = "verification-latest"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        runtime.seed_task(run_id, "fast_local", task_id="rechecked")
+        worker = WorkerManager(runtime, run_id, "fast_local", slots=1, dry_run=True)
+        worker.register_slots()
+        assert worker.tick() == {"started": 1, "completed": 1}
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "verify", "--run-id", run_id, "--json"])
+    assert rc == 0
+    capsys.readouterr()
+
+    validation_command = f'"{sys.executable}" -c "import sys; sys.exit(7)"'
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "verify",
+            "--run-id",
+            run_id,
+            "--include-verified",
+            "--validation-command",
+            validation_command,
+            "--json",
+        ]
+    )
+    assert rc == 1
+    capsys.readouterr()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "verifications", "--run-id", run_id, "--json"])
+    assert rc == 0
+    records = json.loads(capsys.readouterr().out)
+    assert [record["decision"] for record in records] == ["rejected", "accepted"]
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "verifications", "--run-id", run_id, "--latest", "--json"])
+    assert rc == 0
+    latest_records = json.loads(capsys.readouterr().out)
+    assert len(latest_records) == 1
+    assert latest_records[0]["task_id"] == "rechecked"
+    assert latest_records[0]["decision"] == "rejected"
+
+
 def test_smi_releases_blocked_dependencies(tmp_path: Path) -> None:
     run_id = "deps"
     runtime = runtime_for(tmp_path, run_id)
