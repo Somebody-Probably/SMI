@@ -119,10 +119,26 @@ CREATE TABLE IF NOT EXISTS events (
     payload_json TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS verifications (
+    run_id TEXT NOT NULL,
+    verification_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    verifier TEXT NOT NULL,
+    verified_at TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    diagnostics TEXT,
+    PRIMARY KEY (run_id, verification_id),
+    FOREIGN KEY (run_id, task_id) REFERENCES tasks(run_id, task_id),
+    FOREIGN KEY (run_id, attempt_id) REFERENCES attempts(run_id, attempt_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_ready ON tasks(run_id, lane, status, priority DESC);
 CREATE INDEX IF NOT EXISTS idx_slots_idle ON slots(run_id, lane, status);
 CREATE INDEX IF NOT EXISTS idx_leases_active ON leases(run_id, status);
 CREATE INDEX IF NOT EXISTS idx_events_run ON events(run_id, sequence_no);
+CREATE INDEX IF NOT EXISTS idx_verifications_run ON verifications(run_id, task_id, attempt_id);
 """
 
 
@@ -701,6 +717,111 @@ class SMIRuntime:
             payload={"failure_class": failure_class, "retryable": retryable},
         )
 
+    def latest_completed_attempts(
+        self,
+        run_id: str,
+        *,
+        task_id: str | None = None,
+        include_verified: bool = False,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [run_id]
+        task_filter = ""
+        if task_id is not None:
+            task_filter = " AND tasks.task_id=?"
+            params.append(task_id)
+        verified_filter = ""
+        if not include_verified:
+            verified_filter = """
+              AND NOT EXISTS (
+                SELECT 1 FROM verifications
+                WHERE verifications.run_id=attempts.run_id
+                  AND verifications.attempt_id=attempts.attempt_id
+              )
+            """
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                tasks.task_id,
+                tasks.lane,
+                tasks.write_set_json,
+                tasks.metadata_json,
+                attempts.attempt_id,
+                attempts.completed_at,
+                attempts.result_json
+            FROM tasks
+            JOIN attempts ON attempts.run_id=tasks.run_id AND attempts.task_id=tasks.task_id
+            WHERE tasks.run_id=? AND tasks.status='completed' AND attempts.status='completed'
+              {task_filter}
+              {verified_filter}
+              AND attempts.completed_at = (
+                SELECT MAX(inner_attempts.completed_at)
+                FROM attempts AS inner_attempts
+                WHERE inner_attempts.run_id=attempts.run_id
+                  AND inner_attempts.task_id=attempts.task_id
+                  AND inner_attempts.status='completed'
+              )
+            ORDER BY tasks.task_id ASC
+            """,
+            params,
+        ).fetchall()
+        attempts = []
+        for row in rows:
+            record = dict(row)
+            record["write_set"] = json.loads(record.pop("write_set_json") or "[]")
+            record["metadata"] = json.loads(record.pop("metadata_json") or "{}")
+            record["result"] = json.loads(record.pop("result_json") or "{}")
+            attempts.append(record)
+        return attempts
+
+    def record_verification(
+        self,
+        run_id: str,
+        *,
+        task_id: str,
+        attempt_id: str,
+        decision: str,
+        verifier: str,
+        evidence: dict[str, Any] | None = None,
+        diagnostics: str = "",
+    ) -> str:
+        if decision not in {"accepted", "rejected", "held"}:
+            raise ValueError(f"Unsupported verification decision: {decision}")
+        verification_id = f"verification-{uuid.uuid4().hex[:12]}"
+        now = utc_now()
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO verifications(
+                    run_id, verification_id, task_id, attempt_id, decision,
+                    verifier, verified_at, evidence_json, diagnostics
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    run_id,
+                    verification_id,
+                    task_id,
+                    attempt_id,
+                    decision,
+                    verifier,
+                    now,
+                    json_dumps(evidence or {}),
+                    diagnostics,
+                ),
+            )
+        self.publish_event(
+            f"verification.{decision}",
+            run_id,
+            task_id=task_id,
+            attempt_id=attempt_id,
+            payload={
+                "verification_id": verification_id,
+                "verifier": verifier,
+                "diagnostics": diagnostics,
+                "evidence": evidence or {},
+            },
+        )
+        return verification_id
+
     def status_summary(self, run_id: str) -> dict[str, Any]:
         run = self.conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
         if not run:
@@ -741,12 +862,17 @@ class SMIRuntime:
             """,
             (run_id,),
         ).fetchall()
+        verification_rows = self.conn.execute(
+            "SELECT decision, COUNT(*) AS count FROM verifications WHERE run_id=? GROUP BY decision",
+            (run_id,),
+        ).fetchall()
         return {
             "run_id": run_id,
             "status": run["status"],
             "tasks": {row["status"]: row["count"] for row in task_rows},
             "leases": {row["status"]: row["count"] for row in lease_rows},
             "active_leases": [dict(row) for row in active_lease_rows],
+            "verifications": {row["decision"]: row["count"] for row in verification_rows},
             "slots": [
                 {"lane": row["lane"], "status": row["status"], "count": row["count"]}
                 for row in slot_rows

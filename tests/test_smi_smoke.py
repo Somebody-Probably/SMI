@@ -80,6 +80,82 @@ def test_smi_events_cli_renders_recent_events(tmp_path: Path, capsys) -> None:
     assert "task.seeded" in output
 
 
+def test_smi_verify_accepts_completed_dry_run(tmp_path: Path, capsys) -> None:
+    run_id = "verify-accept"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        prompt = runtime.run_dir / "prompts" / "verify.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("verify me", encoding="utf-8")
+        runtime.seed_task(run_id, "fast_local", task_id="verify", prompt_path=str(prompt))
+        worker = WorkerManager(runtime, run_id, "fast_local", slots=1, dry_run=True)
+        worker.register_slots()
+        assert worker.tick() == {"started": 1, "completed": 1}
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "verify", "--run-id", run_id])
+
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert "ACCEPTED verify" in output
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        assert runtime.status_summary(run_id)["verifications"] == {"accepted": 1}
+        assert runtime.recent_events(run_id, message_type="verification.accepted")[-1]["task_id"] == "verify"
+    finally:
+        runtime.close()
+
+
+def test_smi_verify_holds_missing_artifacts_when_required(tmp_path: Path, capsys) -> None:
+    run_id = "verify-hold"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        prompt = runtime.run_dir / "prompts" / "artifact.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("produce artifact", encoding="utf-8")
+        runtime.seed_task(
+            run_id,
+            "fast_local",
+            task_id="artifact",
+            prompt_path=str(prompt),
+            write_set=["reports/artifact.md"],
+            metadata={"expected_output": "outputs/artifact.out"},
+        )
+        worker = WorkerManager(runtime, run_id, "fast_local", slots=1, dry_run=True)
+        worker.register_slots()
+        assert worker.tick() == {"started": 1, "completed": 1}
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "verify",
+            "--run-id",
+            run_id,
+            "--require-artifacts",
+            "--json",
+        ]
+    )
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload[0]["decision"] == "held"
+    assert sorted(payload[0]["evidence"]["missing_artifacts"]) == [
+        "outputs/artifact.out",
+        "reports/artifact.md",
+    ]
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        assert runtime.status_summary(run_id)["verifications"] == {"held": 1}
+    finally:
+        runtime.close()
+
+
 def test_smi_releases_blocked_dependencies(tmp_path: Path) -> None:
     run_id = "deps"
     runtime = runtime_for(tmp_path, run_id)
