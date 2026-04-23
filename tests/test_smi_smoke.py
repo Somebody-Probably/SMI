@@ -382,6 +382,24 @@ def test_smi_reconcile_previews_current_verifier_actions(tmp_path: Path, capsys)
     assert preview["actions"][0]["task_id"] == "reconcile-me"
     assert preview["actions"][0]["controller_hint"] == "exclude_result"
 
+    rc = smi_cli.main(["--run-root", str(tmp_path), "reconcile", "--run-id", run_id, "--hint", "use_result", "--json"])
+    assert rc == 0
+    filtered = json.loads(capsys.readouterr().out)
+    assert filtered["current_decisions"] == {}
+    assert filtered["controller_hints"] == {}
+    assert filtered["actions"] == []
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "reconcile", "--run-id", run_id, "--hint", "exclude_result", "--json"])
+    assert rc == 0
+    filtered = json.loads(capsys.readouterr().out)
+    assert filtered["current_decisions"] == {"rejected": 1}
+    assert filtered["controller_hints"] == {"exclude_result": 1}
+    assert filtered["actions"][0]["task_id"] == "reconcile-me"
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "reconcile", "--run-id", run_id, "--task-id", "missing", "--json"])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["actions"] == []
+
     rc = smi_cli.main(["--run-root", str(tmp_path), "reconcile", "--run-id", run_id])
     assert rc == 0
     output = capsys.readouterr().out

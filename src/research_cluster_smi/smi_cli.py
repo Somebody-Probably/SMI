@@ -275,7 +275,14 @@ def cmd_verifications(args: argparse.Namespace) -> int:
 def cmd_reconcile(args: argparse.Namespace) -> int:
     runtime = runtime_for(args.run_root, args.run_id)
     try:
-        preview = reconciliation_preview(runtime, args.run_id, limit=args.limit)
+        preview = reconciliation_preview(
+            runtime,
+            args.run_id,
+            task_id=args.task_id,
+            decision=args.decision,
+            hint=args.hint,
+            limit=args.limit,
+        )
     finally:
         runtime.close()
     if args.json:
@@ -844,6 +851,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("reconcile", help="Preview controller actions from current verification records.")
     p.add_argument("--run-id", required=True)
+    p.add_argument("--task-id", help="Filter by task.")
+    p.add_argument("--decision", choices=("accepted", "rejected", "held"), help="Filter by decision.")
+    p.add_argument("--hint", choices=("use_result", "exclude_result", "review_result"), help="Filter by controller hint.")
     p.add_argument("--limit", type=int, default=1000)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_reconcile)
