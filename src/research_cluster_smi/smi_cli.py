@@ -34,6 +34,10 @@ def print_jsonl(records: list[dict[str, Any]]) -> None:
         print(json.dumps(record, sort_keys=True))
 
 
+def runtime_from_args(args: argparse.Namespace):
+    return runtime_for(args.run_root, args.run_id, controller_id=getattr(args, "controller_id", None))
+
+
 def materialize_prompt(run_dir: Path, task: dict[str, Any]) -> str | None:
     prompt_path = task.get("prompt_path")
     if task.get("prompt") and not prompt_path:
@@ -87,7 +91,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         lanes = {**DEFAULT_LANES, **load_json(args.lanes_json)}
     rd = run_dir_for(args.run_root, args.run_id)
     (rd / "orders" / "processed").mkdir(parents=True, exist_ok=True)
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         runtime.initialize_run(args.run_id, lanes=lanes)
         for lane, config in lanes.items():
@@ -104,7 +108,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         summary = runtime.status_summary(args.run_id)
     finally:
@@ -173,7 +177,7 @@ def filtered_active_leases(summary: dict[str, Any], args: argparse.Namespace) ->
 
 
 def cmd_leases(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         summary = runtime.status_summary(args.run_id)
     finally:
@@ -201,7 +205,7 @@ def cmd_leases(args: argparse.Namespace) -> int:
 
 
 def cmd_expire_leases(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         expired = runtime.expire_stale_leases(args.run_id, lane=args.lane)
     finally:
@@ -228,7 +232,7 @@ def cmd_expire_leases(args: argparse.Namespace) -> int:
 
 
 def cmd_cancel_attempt(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         canceled = runtime.cancel_attempt(
             args.run_id,
@@ -259,7 +263,7 @@ def cmd_cancel_attempt(args: argparse.Namespace) -> int:
 
 
 def cmd_attempts(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         attempts = runtime.attempt_records(
             args.run_id,
@@ -295,7 +299,7 @@ def cmd_attempts(args: argparse.Namespace) -> int:
 
 
 def cmd_tasks(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         tasks = runtime.task_records(
             args.run_id,
@@ -334,7 +338,7 @@ def cmd_tasks(args: argparse.Namespace) -> int:
 
 
 def cmd_seed(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         count = seed_from_spec(runtime, args.run_id, args.spec)
     finally:
@@ -344,7 +348,7 @@ def cmd_seed(args: argparse.Namespace) -> int:
 
 
 def cmd_orders(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         watcher = OrderWatcher(runtime, args.run_id, runtime.run_dir / "orders")
         results = watcher.poll()
@@ -359,7 +363,7 @@ def cmd_orders(args: argparse.Namespace) -> int:
 
 
 def cmd_events(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         events = runtime.recent_events(args.run_id, limit=args.limit, message_type=args.type)
     finally:
@@ -378,6 +382,8 @@ def cmd_events(args: argparse.Namespace) -> int:
             subject.append(f"task={event['task_id']}")
         if event.get("slot_id"):
             subject.append(f"slot={event['slot_id']}")
+        if event.get("controller_id"):
+            subject.append(f"controller={event['controller_id']}")
         payload = event.get("payload") or {}
         payload_text = ""
         if payload:
@@ -390,7 +396,7 @@ def cmd_events(args: argparse.Namespace) -> int:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         outcomes = verify_completed_attempts(
             runtime,
@@ -430,7 +436,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def cmd_verifications(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         records = runtime.verification_records(
             args.run_id,
@@ -459,7 +465,7 @@ def cmd_verifications(args: argparse.Namespace) -> int:
 
 
 def cmd_reconcile(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         preview = reconciliation_preview(
             runtime,
@@ -495,7 +501,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 
 
 def cmd_worker(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     account_gate = make_account_gate(args)
     try:
         manager = WorkerManager(
@@ -528,7 +534,7 @@ def cmd_worker(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     account_gate = make_account_gate(args)
     try:
         lanes = [lane.strip() for lane in args.lanes.split(",") if lane.strip()]
@@ -860,7 +866,7 @@ def cmd_agent_cluster_smoke(args: argparse.Namespace) -> int:
 
 
 def _set_status(args: argparse.Namespace, status: str) -> int:
-    runtime = runtime_for(args.run_root, args.run_id)
+    runtime = runtime_from_args(args)
     try:
         runtime.set_run_status(args.run_id, status)
     finally:
@@ -990,6 +996,7 @@ def add_account_identity_args(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="research-smi")
     parser.add_argument("--run-root", default=str(DEFAULT_RUN_ROOT), help="Directory holding SMI run state.")
+    parser.add_argument("--controller-id", default=os.environ.get("SMI_CONTROLLER_ID"), help="Controller identity stamped onto emitted runtime events.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("init", help="Initialize a run.")
