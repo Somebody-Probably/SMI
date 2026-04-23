@@ -255,6 +255,16 @@ are released, their slots return to `idle`, and SMI writes an
 completion or failure reports for an already terminal attempt are ignored and
 recorded as `attempt.terminal_update_ignored` events.
 
+Use `attempts` for direct attempt-ledger inspection:
+
+```bash
+research-smi attempts --run-id <run-id>
+research-smi attempts --run-id <run-id> --status failed --failure-class attempt_canceled --json
+```
+
+The command is read-only and supports filtering by task, attempt status, and
+failure class. JSON output includes parsed attempt result packets.
+
 ## Agent Workers
 
 Workers can run a CLI agent for each claimed task. The backward-compatible

@@ -862,6 +862,61 @@ class SMIRuntime:
         )
         return record
 
+    def attempt_records(
+        self,
+        run_id: str,
+        *,
+        task_id: str | None = None,
+        status: str | None = None,
+        failure_class: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [run_id]
+        filters = []
+        if task_id is not None:
+            filters.append("attempts.task_id=?")
+            params.append(task_id)
+        if status is not None:
+            filters.append("attempts.status=?")
+            params.append(status)
+        if failure_class is not None:
+            filters.append("attempts.failure_class=?")
+            params.append(failure_class)
+        where = ""
+        if filters:
+            where = " AND " + " AND ".join(filters)
+        params.append(max(0, int(limit)))
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                attempts.run_id,
+                attempts.attempt_id,
+                attempts.task_id,
+                tasks.lane,
+                attempts.slot_id,
+                attempts.lease_id,
+                attempts.status,
+                attempts.enqueued_at,
+                attempts.started_at,
+                attempts.completed_at,
+                attempts.failure_class,
+                attempts.diagnostics,
+                attempts.result_json
+            FROM attempts
+            JOIN tasks ON tasks.run_id=attempts.run_id AND tasks.task_id=attempts.task_id
+            WHERE attempts.run_id=?{where}
+            ORDER BY attempts.enqueued_at DESC, attempts.rowid DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        attempts = []
+        for row in rows:
+            record = dict(row)
+            record["result"] = json.loads(record.pop("result_json") or "{}")
+            attempts.append(record)
+        return attempts
+
     def latest_completed_attempts(
         self,
         run_id: str,
