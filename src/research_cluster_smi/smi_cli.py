@@ -206,6 +206,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             verifier=args.verifier,
             artifact_root=args.artifact_root,
             require_artifacts=args.require_artifacts,
+            validation_command=args.validation_command,
             include_verified=args.include_verified,
         )
     finally:
@@ -223,7 +224,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     ]
     if args.json:
         print(json.dumps(payload, indent=2))
-        return 0
+        return 1 if any(outcome.decision == "rejected" for outcome in outcomes) else 0
     if not outcomes:
         print("No completed attempts pending verification.")
         return 0
@@ -766,6 +767,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verifier", default="neutral")
     p.add_argument("--artifact-root", help="Root used for relative expected artifact checks. Defaults to run dir.")
     p.add_argument("--require-artifacts", action="store_true", help="Hold tasks when declared artifacts are missing.")
+    p.add_argument("--validation-command", help="Optional command that must exit 0 for each verified attempt.")
     p.add_argument("--include-verified", action="store_true", help="Create another verification for already verified attempts.")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_verify)

@@ -65,6 +65,20 @@ it accepts completed attempts that have no failed process result. Use
 research-smi verify --run-id <run-id> --require-artifacts
 ```
 
+Use `--validation-command` to run a verifier-specific command once per completed
+attempt. The command runs from the run directory by default, must exit 0, and
+records its expanded command, return code, stdout, and stderr as evidence:
+
+```bash
+research-smi verify --run-id <run-id> --validation-command "python checks/verify.py"
+```
+
+The command can use literal placeholders `{artifact_root}`, `{run_dir}`,
+`{task_id}`, and `{attempt_id}`. SMI also sets `SMI_VERIFY_TASK_ID`,
+`SMI_VERIFY_ATTEMPT_ID`, and `SMI_VERIFY_ARTIFACT_ROOT` for validation scripts.
+A nonzero validation command rejects the attempt and makes the CLI exit nonzero,
+including with `--json`.
+
 This initial verifier records decisions without changing dependency behavior.
 Downstream reconciliation can later decide how accepted, rejected, and held
 records should affect merges, retries, and public reports.
