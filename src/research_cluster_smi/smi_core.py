@@ -829,6 +829,7 @@ class SMIRuntime:
         task_id: str | None = None,
         decision: str | None = None,
         limit: int = 20,
+        latest: bool = False,
     ) -> list[dict[str, Any]]:
         if decision is not None and decision not in {"accepted", "rejected", "held"}:
             raise ValueError(f"Unsupported verification decision: {decision}")
@@ -843,6 +844,22 @@ class SMIRuntime:
         where = ""
         if filters:
             where = " AND " + " AND ".join(filters)
+        latest_filter = ""
+        if latest:
+            latest_filter = """
+              AND NOT EXISTS (
+                SELECT 1 FROM verifications AS newer
+                WHERE newer.run_id=verifications.run_id
+                  AND newer.attempt_id=verifications.attempt_id
+                  AND (
+                    newer.verified_at > verifications.verified_at
+                    OR (
+                      newer.verified_at = verifications.verified_at
+                      AND newer.rowid > verifications.rowid
+                    )
+                  )
+              )
+            """
         params.append(max(0, int(limit)))
         rows = self.conn.execute(
             f"""
@@ -857,8 +874,8 @@ class SMIRuntime:
                 evidence_json,
                 diagnostics
             FROM verifications
-            WHERE run_id=?{where}
-            ORDER BY verified_at DESC, verification_id DESC
+            WHERE run_id=?{where}{latest_filter}
+            ORDER BY verified_at DESC, rowid DESC
             LIMIT ?
             """,
             params,

@@ -87,10 +87,13 @@ Use `verifications` to inspect the verification ledger directly:
 ```bash
 research-smi verifications --run-id <run-id> --limit 20
 research-smi verifications --run-id <run-id> --decision rejected --json
+research-smi verifications --run-id <run-id> --latest
 ```
 
 Ledger records include the verification ID, task ID, attempt ID, decision,
-verifier, timestamp, diagnostics, and evidence packet.
+verifier, timestamp, diagnostics, and evidence packet. Use `--latest` when a
+task has been rechecked and the controller only needs the current record for
+each attempt.
 
 This initial verifier records decisions without changing dependency behavior.
 Downstream reconciliation can later decide how accepted, rejected, and held
