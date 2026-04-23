@@ -20,12 +20,19 @@ from .worktree import WorktreeManager, find_repo_root
 class ActiveProcess:
     assignment: dict
     process: subprocess.Popen[str]
-    command: list[str]
+    command: list[str] | str
     result_path: Path
     stdout_path: Path
     stderr_path: Path
     worktree_info: dict | None
     account_permit: AccountPermit | None
+
+
+def agent_subprocess_command(command: str) -> tuple[list[str] | str, bool]:
+    """Return a subprocess command and whether it needs shell execution."""
+    if os.name == "nt":
+        return command, True
+    return shlex.split(command), False
 
 
 class WorkerManager:
@@ -209,12 +216,13 @@ class WorkerManager:
             result_path = result_dir / "result.json"
             stdout_path = result_dir / "stdout.txt"
             stderr_path = result_dir / "stderr.txt"
-            command = shlex.split(self.agent_command)
+            command, use_shell = agent_subprocess_command(self.agent_command)
             with stdout_path.open("w", encoding="utf-8") as stdout_handle, stderr_path.open(
                 "w", encoding="utf-8"
             ) as stderr_handle:
                 process = subprocess.Popen(
                     command,
+                    shell=use_shell,
                     stdin=subprocess.PIPE,
                     stdout=stdout_handle,
                     stderr=stderr_handle,
@@ -321,10 +329,11 @@ class WorkerManager:
             self.runtime.complete_attempt(self.run_id, attempt_id, result=result)
             return True
 
-        command = shlex.split(self.agent_command)
+        command, use_shell = agent_subprocess_command(self.agent_command)
         try:
             completed = subprocess.run(
                 command,
+                shell=use_shell,
                 input=prompt,
                 text=True,
                 capture_output=True,

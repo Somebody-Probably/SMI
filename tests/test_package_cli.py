@@ -60,3 +60,20 @@ def test_package_doctor_fails_when_required_tool_missing(monkeypatch, tmp_path: 
         "name": "ssh",
         "detail": "missing; needed for cluster sessions",
     } in payload["results"]
+
+
+def test_package_doctor_local_mode_skips_cluster_tools(monkeypatch, tmp_path: Path, capsys) -> None:
+    (tmp_path / "README.md").write_text("placeholder\n", encoding="utf-8")
+    monkeypatch.setattr(package_cli, "REQUIRED_PACKAGE_FILES", ("README.md",))
+    monkeypatch.setattr(package_cli, "LOCAL_CONFIG_HINTS", {})
+    monkeypatch.setattr(package_cli.shutil, "which", lambda name: None if name == "rsync" else f"/usr/bin/{name}")
+    monkeypatch.setattr(package_cli, "globus_command", lambda: None)
+
+    rc = package_cli.main(["--repo-root", str(tmp_path), "--local", "--json"])
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    names = {result["name"] for result in payload["results"]}
+    assert "rsync" not in names
+    assert "globus" not in names
+    assert any(result["name"] == "git" for result in payload["results"])

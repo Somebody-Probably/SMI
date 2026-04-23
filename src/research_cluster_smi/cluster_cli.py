@@ -43,7 +43,7 @@ def load_config(path: Path) -> dict[str, Any]:
             f"Config not found: {path}. Copy config/clusters.example.json to "
             "config/clusters.json and edit it for your account."
         )
-    with path.open("r", encoding="utf-8") as handle:
+    with path.open("r", encoding="utf-8-sig") as handle:
         config = json.load(handle)
     if "clusters" not in config or not isinstance(config["clusters"], dict):
         raise ConfigError("Config must contain a 'clusters' object.")
@@ -109,6 +109,13 @@ def ssh_base(cluster: dict[str, Any]) -> list[str]:
     return ["ssh", cluster["ssh_alias"]]
 
 
+def quote_local_path(path: str | Path) -> str:
+    value = str(path)
+    if os.name == "nt":
+        return value
+    return shlex.quote(value)
+
+
 def ssh_control_command(cluster: dict[str, Any], operation: str) -> list[str]:
     return ["ssh", "-O", operation, cluster["ssh_alias"]]
 
@@ -141,7 +148,7 @@ def load_selected_cluster(args: argparse.Namespace) -> tuple[dict[str, Any], str
 def connect_cluster(cluster: dict[str, Any], socket_dir: str | Path, *, dry_run: bool = False) -> int:
     expanded_socket_dir = Path(socket_dir).expanduser()
     if dry_run:
-        print(f"mkdir -p {shlex.quote(str(expanded_socket_dir))}")
+        print(f"mkdir -p {quote_local_path(expanded_socket_dir)}")
     else:
         expanded_socket_dir.mkdir(parents=True, exist_ok=True)
     return run_command(["ssh", "-f", "-N", cluster["ssh_alias"]], dry_run)
@@ -256,7 +263,7 @@ def cmd_session_touch(args: argparse.Namespace) -> int:
     if args.dry_run:
         print(shlex.join(ssh_control_command(cluster, "check")))
         if args.open_if_missing:
-            print(f"mkdir -p {shlex.quote(str(Path(args.socket_dir).expanduser()))}")
+            print(f"mkdir -p {quote_local_path(Path(args.socket_dir).expanduser())}")
             print(shlex.join(["ssh", "-f", "-N", cluster["ssh_alias"]]))
         print(shlex.join(touch_command))
         return 0

@@ -24,7 +24,7 @@ DEFAULT_RUN_ROOT = Path(os.environ.get("SMI_RUN_ROOT", "runs"))
 
 
 def load_json(path: str | Path) -> Any:
-    with Path(path).open("r", encoding="utf-8") as handle:
+    with Path(path).open("r", encoding="utf-8-sig") as handle:
         return json.load(handle)
 
 

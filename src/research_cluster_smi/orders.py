@@ -49,7 +49,7 @@ class OrderWatcher:
 
     def _process(self, path: Path) -> OrderResult:
         try:
-            order = json.loads(path.read_text(encoding="utf-8"))
+            order = json.loads(path.read_text(encoding="utf-8-sig"))
             if not isinstance(order, dict):
                 return OrderResult(path.name, "unknown", False, "Order must be a JSON object.", {})
             order_type = str(order.get("order_type", "")).lower()
@@ -179,4 +179,3 @@ class OrderWatcher:
                     )
         self.runtime.publish_event("order.lane_config", self.run_id, payload={"updated": updated})
         return OrderResult(filename, "lane_config", True, f"Updated {len(set(updated))} lane(s).", {})
-

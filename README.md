@@ -22,6 +22,21 @@ mkdir -p ~/.ssh/sockets
 research-smi-doctor
 ```
 
+## Quick Start On Windows 10
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .
+$env:SMI_RUN_ROOT = "$PWD\runs-windows"
+research-smi-doctor --local
+```
+
+Then run the local harness in `docs/windows-setup.md`. Windows is used for
+cluster-free compatibility testing; MacBook remains the primary path for SSH,
+Globus, and real cluster validation.
+
 Edit `config/clusters.json` and add your Alliance username, account, and remote paths. Edit `config/globus.json` with your Globus endpoint IDs and transfer roots. Add the relevant blocks from `config/ssh_config.example` to `~/.ssh/config`. The example config tracks the current Alliance renewal names: Trillium, Fir, Nibi, Narval, and Rorqual, with legacy aliases documented for Niagara, Cedar, Graham, and Beluga.
 
 Check the local setup:
@@ -89,6 +104,8 @@ research-smi run --run-id SMI_project_1 --lanes fast_local,heavy_local,verify_lo
 
 - `MANUAL.md`: complete new-researcher onboarding and operating manual.
 - `docs/index.md`: map of all operator, chemistry, transfer, and test docs.
+- `docs/windows-setup.md`: Windows 10 local harness for SMI smoke tests.
+- `docs/smi-general-harness-plan.md`: cross-platform harness roadmap and private agent-market boundary.
 - `src/research_cluster_smi/cluster_cli.py`: cluster connection, sync, submit, and status CLI.
 - `src/research_cluster_smi/package_cli.py`: package-level doctor for setup validation.
 - `src/research_cluster_smi/chem_cli.py`: computational chemistry manifest and SMI spec helpers.
@@ -110,6 +127,7 @@ research-smi run --run-id SMI_project_1 --lanes fast_local,heavy_local,verify_lo
 Included:
 
 - Mac-compatible Python CLI and bash wrappers.
+- Windows 10 local harness documentation for cluster-free compatibility tests.
 - Config-driven SSH aliases, remote paths, and sbatch defaults.
 - First-class Globus CLI support for staged input transfer and artifact harvest.
 - Current Alliance cluster examples with conservative account-only defaults and opt-in QFF-derived profiles.

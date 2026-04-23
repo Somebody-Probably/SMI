@@ -19,6 +19,9 @@ REQUIRED_TOOLS = {
     "rsync": "needed for workspace sync",
     "globus": "needed for supported large transfer staging and harvest",
 }
+LOCAL_TOOLS = {
+    "git": "needed for worktree smoke tests",
+}
 OPTIONAL_TOOLS = {
     "codex": "needed for Codex CLI swarm workers",
 }
@@ -27,8 +30,10 @@ REQUIRED_PACKAGE_FILES = (
     "MANUAL.md",
     "docs/index.md",
     "docs/mac-setup.md",
+    "docs/windows-setup.md",
     "docs/cluster-workflow.md",
     "docs/smi-manager-protocol.md",
+    "docs/smi-general-harness-plan.md",
     "config/clusters.example.json",
     "config/globus.example.json",
     "config/ssh_config.example",
@@ -72,13 +77,15 @@ def check_python(results: list[dict[str, Any]]) -> None:
         add_result(results, "FAIL", "python", f"{version}; Python 3.10 or newer is required")
 
 
-def check_tools(results: list[dict[str, Any]]) -> None:
-    for tool, note in REQUIRED_TOOLS.items():
+def check_tools(results: list[dict[str, Any]], *, local_only: bool = False) -> None:
+    required_tools = LOCAL_TOOLS if local_only else REQUIRED_TOOLS
+    for tool, note in required_tools.items():
         path = globus_command() if tool == "globus" else shutil.which(tool)
         if path:
             add_result(results, "OK", tool, path)
         else:
-            add_result(results, "FAIL", tool, f"missing; {note}")
+            status = "WARN" if local_only else "FAIL"
+            add_result(results, status, tool, f"missing; {note}")
     for tool, note in OPTIONAL_TOOLS.items():
         path = shutil.which(tool)
         if path:
@@ -167,6 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--globus-config", default="config/globus.json", help="Globus config path.")
     parser.add_argument("--cluster", help="Cluster name to validate from the config.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable diagnostics.")
+    parser.add_argument("--local", action="store_true", help="Check only local SMI harness readiness.")
     parser.add_argument("--strict", action="store_true", help="Return nonzero when warnings are present.")
     return parser
 
@@ -177,11 +185,12 @@ def main(argv: list[str] | None = None) -> int:
     results: list[dict[str, Any]] = []
 
     check_python(results)
-    check_tools(results)
+    check_tools(results, local_only=args.local)
     check_package_files(repo_root, results)
     check_local_configs(repo_root, results)
-    check_cluster_config(repo_root, Path(args.cluster_config), args.cluster, results)
-    check_globus_config(repo_root, Path(args.globus_config), results)
+    if not args.local:
+        check_cluster_config(repo_root, Path(args.cluster_config), args.cluster, results)
+        check_globus_config(repo_root, Path(args.globus_config), results)
 
     payload = {"repo_root": str(repo_root), "results": results}
     if args.json:
