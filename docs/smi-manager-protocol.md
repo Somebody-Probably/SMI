@@ -252,7 +252,8 @@ Canceled attempts are failed with `failure_class=attempt_canceled`, their leases
 are released, their slots return to `idle`, and SMI writes an
 `attempt.canceled` event. By default the task returns to `retry_ready`; use
 `--no-retry` when the cancellation should reject the task instead. Late worker
-completion or failure reports for an already terminal attempt are ignored.
+completion or failure reports for an already terminal attempt are ignored and
+recorded as `attempt.terminal_update_ignored` events.
 
 ## Agent Workers
 
