@@ -286,6 +286,42 @@ def cmd_attempts(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tasks(args: argparse.Namespace) -> int:
+    runtime = runtime_for(args.run_root, args.run_id)
+    try:
+        tasks = runtime.task_records(
+            args.run_id,
+            task_id=args.task_id,
+            lane=args.lane,
+            status=args.status,
+            limit=args.limit,
+        )
+    finally:
+        runtime.close()
+    payload = {
+        "run_id": args.run_id,
+        "count": len(tasks),
+        "tasks": tasks,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return 0
+    if not tasks:
+        print("No tasks found.")
+        return 0
+    for task in tasks:
+        latest = ""
+        if task.get("latest_attempt_id"):
+            latest = f" latest_attempt={task['latest_attempt_id']} latest_status={task['latest_attempt_status']}"
+            if task.get("latest_failure_class"):
+                latest += f" latest_failure_class={task['latest_failure_class']}"
+        print(
+            f"{task['status'].upper()} {task['task_id']} lane={task['lane']} priority={task['priority']} "
+            f"deps={len(task['dependencies'])} writes={len(task['write_set'])} attempts={task['attempt_count']}{latest}"
+        )
+    return 0
+
+
 def cmd_seed(args: argparse.Namespace) -> int:
     runtime = runtime_for(args.run_root, args.run_id)
     try:
@@ -988,6 +1024,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_attempts)
+
+    p = sub.add_parser("tasks", help="Show task records.")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--task-id", help="Filter by task.")
+    p.add_argument("--lane", help="Filter by lane.")
+    p.add_argument(
+        "--status",
+        choices=("ready", "retry_ready", "blocked", "leased", "running", "completed", "rejected"),
+        help="Filter by task status.",
+    )
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_tasks)
 
     p = sub.add_parser("seed", help="Seed tasks from a JSON spec.")
     p.add_argument("--run-id", required=True)

@@ -373,6 +373,72 @@ def test_smi_attempts_cli_filters_attempt_records(tmp_path: Path, capsys) -> Non
     assert "attempt=" in output
 
 
+def test_smi_tasks_cli_filters_task_records(tmp_path: Path, capsys) -> None:
+    run_id = "task-ledger-cli"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}, "remote_transfer": {"max_slots": 1}})
+        runtime.seed_task(
+            run_id,
+            "fast_local",
+            task_id="completed",
+            priority=200,
+            write_set=["notes/completed.md"],
+            metadata={"owner": "codex"},
+        )
+        runtime.seed_task(
+            run_id,
+            "remote_transfer",
+            task_id="blocked",
+            priority=150,
+            dependencies=["completed"],
+            write_set=["remote/blocked"],
+        )
+        worker = WorkerManager(runtime, run_id, "fast_local", slots=1, dry_run=True)
+        worker.register_slots()
+        assert worker.tick() == {"started": 1, "completed": 1}
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "tasks", "--run-id", run_id, "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 2
+    by_task = {task["task_id"]: task for task in payload["tasks"]}
+    assert by_task["completed"]["status"] == "completed"
+    assert by_task["completed"]["write_set"] == ["notes/completed.md"]
+    assert by_task["completed"]["metadata"] == {"owner": "codex"}
+    assert by_task["completed"]["attempt_count"] == 1
+    assert by_task["completed"]["latest_attempt_status"] == "completed"
+    assert by_task["blocked"]["status"] == "ready"
+    assert by_task["blocked"]["dependencies"] == ["completed"]
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "tasks",
+            "--run-id",
+            run_id,
+            "--lane",
+            "remote_transfer",
+            "--status",
+            "ready",
+            "--json",
+        ]
+    )
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 1
+    assert payload["tasks"][0]["task_id"] == "blocked"
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "tasks", "--run-id", run_id, "--task-id", "completed"])
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert "COMPLETED completed" in output
+    assert "latest_attempt=" in output
+
+
 def test_smi_events_cli_renders_recent_events(tmp_path: Path, capsys) -> None:
     run_id = "events-cli"
     runtime = runtime_for(tmp_path, run_id)

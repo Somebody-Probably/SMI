@@ -917,6 +917,84 @@ class SMIRuntime:
             attempts.append(record)
         return attempts
 
+    def task_records(
+        self,
+        run_id: str,
+        *,
+        task_id: str | None = None,
+        lane: str | None = None,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [run_id]
+        filters = []
+        if task_id is not None:
+            filters.append("tasks.task_id=?")
+            params.append(task_id)
+        if lane is not None:
+            filters.append("tasks.lane=?")
+            params.append(lane)
+        if status is not None:
+            filters.append("tasks.status=?")
+            params.append(status)
+        where = ""
+        if filters:
+            where = " AND " + " AND ".join(filters)
+        params.append(max(0, int(limit)))
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                tasks.run_id,
+                tasks.task_id,
+                tasks.lane,
+                tasks.status,
+                tasks.priority,
+                tasks.dependencies_json,
+                tasks.write_set_json,
+                tasks.prompt_path,
+                tasks.metadata_json,
+                tasks.created_at,
+                tasks.updated_at,
+                (
+                    SELECT COUNT(*)
+                    FROM attempts
+                    WHERE attempts.run_id=tasks.run_id AND attempts.task_id=tasks.task_id
+                ) AS attempt_count,
+                latest_attempt.attempt_id AS latest_attempt_id,
+                latest_attempt.status AS latest_attempt_status,
+                latest_attempt.failure_class AS latest_failure_class
+            FROM tasks
+            LEFT JOIN attempts AS latest_attempt
+              ON latest_attempt.run_id=tasks.run_id
+             AND latest_attempt.task_id=tasks.task_id
+             AND NOT EXISTS (
+                SELECT 1
+                FROM attempts AS newer_attempt
+                WHERE newer_attempt.run_id=latest_attempt.run_id
+                  AND newer_attempt.task_id=latest_attempt.task_id
+                  AND (
+                    newer_attempt.enqueued_at > latest_attempt.enqueued_at
+                    OR (
+                      newer_attempt.enqueued_at = latest_attempt.enqueued_at
+                      AND newer_attempt.rowid > latest_attempt.rowid
+                    )
+                  )
+             )
+            WHERE tasks.run_id=?{where}
+            ORDER BY tasks.priority DESC, tasks.created_at ASC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        tasks = []
+        for row in rows:
+            record = dict(row)
+            record["dependencies"] = json.loads(record.pop("dependencies_json") or "[]")
+            record["write_set"] = json.loads(record.pop("write_set_json") or "[]")
+            record["metadata"] = json.loads(record.pop("metadata_json") or "{}")
+            tasks.append(record)
+        return tasks
+
     def latest_completed_attempts(
         self,
         run_id: str,
