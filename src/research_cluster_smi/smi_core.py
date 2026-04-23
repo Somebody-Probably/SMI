@@ -717,10 +717,36 @@ class SMIRuntime:
             "SELECT lane, max_slots, admission_state, backpressure FROM lanes WHERE run_id=? ORDER BY lane",
             (run_id,),
         ).fetchall()
+        lease_rows = self.conn.execute(
+            "SELECT status, COUNT(*) AS count FROM leases WHERE run_id=? GROUP BY status",
+            (run_id,),
+        ).fetchall()
+        active_lease_rows = self.conn.execute(
+            """
+            SELECT
+                leases.lease_id,
+                leases.task_id,
+                leases.attempt_id,
+                leases.slot_id,
+                leases.issued_at,
+                leases.expires_at,
+                tasks.lane,
+                slots.status AS slot_status,
+                slots.last_heartbeat_at
+            FROM leases
+            JOIN tasks ON tasks.run_id=leases.run_id AND tasks.task_id=leases.task_id
+            JOIN slots ON slots.run_id=leases.run_id AND slots.slot_id=leases.slot_id
+            WHERE leases.run_id=? AND leases.status='active'
+            ORDER BY leases.expires_at ASC
+            """,
+            (run_id,),
+        ).fetchall()
         return {
             "run_id": run_id,
             "status": run["status"],
             "tasks": {row["status"]: row["count"] for row in task_rows},
+            "leases": {row["status"]: row["count"] for row in lease_rows},
+            "active_leases": [dict(row) for row in active_lease_rows],
             "slots": [
                 {"lane": row["lane"], "status": row["status"], "count": row["count"]}
                 for row in slot_rows
@@ -728,6 +754,48 @@ class SMIRuntime:
             "lanes": [dict(row) for row in lane_rows],
             "run_dir": str(self.run_dir),
         }
+
+    def recent_events(
+        self,
+        run_id: str,
+        *,
+        limit: int = 20,
+        message_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [run_id]
+        type_filter = ""
+        if message_type:
+            type_filter = " AND message_type=?"
+            params.append(message_type)
+        params.append(limit)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                sequence_no,
+                message_id,
+                run_id,
+                message_type,
+                lane,
+                task_id,
+                attempt_id,
+                lease_id,
+                slot_id,
+                timestamp,
+                payload_json
+            FROM events
+            WHERE run_id=?
+              {type_filter}
+            ORDER BY sequence_no DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        events = []
+        for row in reversed(rows):
+            record = dict(row)
+            record["payload"] = json.loads(record.pop("payload_json") or "{}")
+            events.append(record)
+        return events
 
 
 def run_dir_for(run_root: str | Path, run_id: str) -> Path:

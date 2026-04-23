@@ -121,6 +121,17 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"  {lane['lane']:<16} max={lane['max_slots']} "
             f"admission={lane['admission_state']} backpressure={lane['backpressure']}"
         )
+    if summary.get("leases"):
+        print("Leases:")
+        for status, count in sorted(summary["leases"].items()):
+            print(f"  {status:<14} {count}")
+    if summary.get("active_leases"):
+        print("Active leases:")
+        for lease in summary["active_leases"]:
+            print(
+                f"  {lease['lease_id']} task={lease['task_id']} slot={lease['slot_id']} "
+                f"expires={lease['expires_at']}"
+            )
     return 0
 
 
@@ -147,6 +158,37 @@ def cmd_orders(args: argparse.Namespace) -> int:
         status = "OK" if result.success else "FAIL"
         print(f"{status} {result.filename}: {result.order_type}: {result.message}")
     return 0 if all(result.success for result in results) else 1
+
+
+def cmd_events(args: argparse.Namespace) -> int:
+    runtime = runtime_for(args.run_root, args.run_id)
+    try:
+        events = runtime.recent_events(args.run_id, limit=args.limit, message_type=args.type)
+    finally:
+        runtime.close()
+    if args.json:
+        print(json.dumps(events, indent=2))
+        return 0
+    if not events:
+        print("No events found.")
+        return 0
+    for event in events:
+        subject = []
+        if event.get("lane"):
+            subject.append(f"lane={event['lane']}")
+        if event.get("task_id"):
+            subject.append(f"task={event['task_id']}")
+        if event.get("slot_id"):
+            subject.append(f"slot={event['slot_id']}")
+        payload = event.get("payload") or {}
+        payload_text = ""
+        if payload:
+            payload_text = " " + json.dumps(payload, sort_keys=True)
+        subject_text = " ".join(subject)
+        if subject_text:
+            subject_text = " " + subject_text
+        print(f"{event['sequence_no']:>5} {event['timestamp']} {event['message_type']}{subject_text}{payload_text}")
+    return 0
 
 
 def cmd_worker(args: argparse.Namespace) -> int:
@@ -666,6 +708,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("orders", help="Process pending hot-folder orders once.")
     p.add_argument("--run-id", required=True)
     p.set_defaults(func=cmd_orders)
+
+    p = sub.add_parser("events", help="Show recent SMI event records.")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--type", help="Filter by event message_type.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_events)
 
     p = sub.add_parser("worker", help="Run one lane worker manager.")
     p.add_argument("--run-id", required=True)
