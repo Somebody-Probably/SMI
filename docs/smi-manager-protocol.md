@@ -26,6 +26,24 @@ runs/<run-id>/
     processed/
 ```
 
+## Inspecting State
+
+Use `status` for queue, lane, slot, and lease summaries:
+
+```bash
+research-smi status --run-id <run-id>
+research-smi status --run-id <run-id> --json
+```
+
+Use `events` for recent append-only transition records:
+
+```bash
+research-smi events --run-id <run-id> --limit 20
+research-smi events --run-id <run-id> --type lease.expired --json
+```
+
+The event log is also mirrored as JSONL at `runs/<run-id>/events.jsonl`.
+
 ## Task Spec
 
 ```json

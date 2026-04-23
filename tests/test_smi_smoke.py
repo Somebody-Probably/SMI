@@ -3,6 +3,7 @@ import sys
 import time
 from pathlib import Path
 
+from research_cluster_smi import smi_cli
 from research_cluster_smi.account_gate import AccountGate, account_gate_path
 from research_cluster_smi.orders import OrderWatcher
 from research_cluster_smi.smi_core import runtime_for
@@ -35,6 +36,48 @@ def test_smi_dry_run_smoke(tmp_path: Path) -> None:
         assert result["type"] == "dry_run"
     finally:
         runtime.close()
+
+
+def test_status_summary_includes_leases_and_recent_events(tmp_path: Path) -> None:
+    run_id = "inspect"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        prompt = runtime.run_dir / "prompts" / "inspect.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("inspect me", encoding="utf-8")
+        runtime.seed_task(run_id, "fast_local", task_id="inspect", prompt_path=str(prompt))
+        assignment = runtime.claim_next_task(run_id, "fast_local-00")
+        assert assignment is None
+        runtime.register_slot(run_id, "fast_local", "fast_local-00")
+        assignment = runtime.claim_next_task(run_id, "fast_local-00")
+        assert assignment is not None
+
+        summary = runtime.status_summary(run_id)
+        events = runtime.recent_events(run_id, limit=2)
+
+        assert summary["leases"] == {"active": 1}
+        assert summary["active_leases"][0]["task_id"] == "inspect"
+        assert [event["message_type"] for event in events] == ["slot.registered", "task.claimed"]
+    finally:
+        runtime.close()
+
+
+def test_smi_events_cli_renders_recent_events(tmp_path: Path, capsys) -> None:
+    run_id = "events-cli"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        runtime.seed_task(run_id, "fast_local", task_id="hello")
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "events", "--run-id", run_id, "--limit", "5"])
+
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert "run.initialized" in output
+    assert "task.seeded" in output
 
 
 def test_smi_releases_blocked_dependencies(tmp_path: Path) -> None:
