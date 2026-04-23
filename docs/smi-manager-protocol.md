@@ -103,6 +103,7 @@ verification records:
 research-smi reconcile --run-id <run-id>
 research-smi reconcile --run-id <run-id> --hint exclude_result
 research-smi reconcile --run-id <run-id> --fail-on-hint exclude_result --json
+research-smi reconcile --run-id <run-id> --fail-on-pending --json
 research-smi reconcile --run-id <run-id> --json
 ```
 
@@ -112,7 +113,8 @@ attempt. It maps accepted records to `use_result`, rejected records to
 state, retry queues, dependency release, or reports. Use `--task-id`,
 `--decision`, or `--hint` to preview a focused subset. Use `--fail-on-hint` to
 make automation exit nonzero when a selected hint is present while still
-emitting the preview.
+emitting the preview. Use `--fail-on-pending` to return nonzero while completed
+attempts still need verification.
 
 This initial verifier records decisions without changing dependency behavior.
 Downstream reconciliation can later decide how accepted, rejected, and held

@@ -287,6 +287,8 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         runtime.close()
     fail_on_hints = set(args.fail_on_hint or [])
     exit_code = 1 if any(preview["controller_hints"].get(hint, 0) for hint in fail_on_hints) else 0
+    if args.fail_on_pending and preview["pending_verification"]:
+        exit_code = 1
     if args.json:
         print(json.dumps(preview, indent=2))
         return exit_code
@@ -294,7 +296,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     print(f"Pending verification: {preview['pending_verification']}")
     if not preview["actions"]:
         print("No current verification records found.")
-        return 0
+        return exit_code
     for action in preview["actions"]:
         diagnostics = action.get("diagnostics") or ""
         suffix = f": {diagnostics}" if diagnostics else ""
@@ -862,6 +864,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("use_result", "exclude_result", "review_result"),
         help="Exit nonzero if the preview contains this controller hint. Can be repeated.",
     )
+    p.add_argument("--fail-on-pending", action="store_true", help="Exit nonzero if completed attempts are pending verification.")
     p.add_argument("--limit", type=int, default=1000)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_reconcile)
