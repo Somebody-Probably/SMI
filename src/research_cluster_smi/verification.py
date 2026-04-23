@@ -157,7 +157,7 @@ def verify_completed_attempts(
 
 
 def reconciliation_preview(runtime: SMIRuntime, run_id: str, *, limit: int = 1000) -> dict[str, Any]:
-    records = runtime.verification_records(run_id, latest=True, limit=limit)
+    records = runtime.verification_records(run_id, latest=True, current_attempts=True, limit=limit)
     actions = []
     hint_counts: dict[str, int] = {}
     for record in records:

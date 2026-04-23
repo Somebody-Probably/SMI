@@ -389,6 +389,70 @@ def test_smi_reconcile_previews_current_verifier_actions(tmp_path: Path, capsys)
     assert "hint=exclude_result" in output
 
 
+def test_smi_reconcile_ignores_stale_completed_attempts(tmp_path: Path, capsys) -> None:
+    run_id = "verification-current-attempt"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        runtime.register_slot(run_id, "fast_local", "fast_local-00")
+        runtime.seed_task(run_id, "fast_local", task_id="retried")
+        first = runtime.claim_next_task(run_id, "fast_local-00")
+        assert first is not None
+        runtime.start_attempt(run_id, first.attempt_id)
+        runtime.complete_attempt(run_id, first.attempt_id, {"returncode": 0})
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "verify", "--run-id", run_id, "--json"])
+    assert rc == 0
+    capsys.readouterr()
+
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        with runtime.conn:
+            runtime.conn.execute(
+                "UPDATE tasks SET status='retry_ready', updated_at=? WHERE run_id=? AND task_id=?",
+                ("2099-01-01T00:00:00.000Z", run_id, "retried"),
+            )
+        second = runtime.claim_next_task(run_id, "fast_local-00")
+        assert second is not None
+        assert second.attempt_id != first.attempt_id
+        runtime.start_attempt(run_id, second.attempt_id)
+        runtime.complete_attempt(run_id, second.attempt_id, {"returncode": 0})
+    finally:
+        runtime.close()
+
+    validation_command = f'"{sys.executable}" -c "import sys; sys.exit(7)"'
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "verify",
+            "--run-id",
+            run_id,
+            "--validation-command",
+            validation_command,
+            "--json",
+        ]
+    )
+    assert rc == 1
+    capsys.readouterr()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "reconcile", "--run-id", run_id, "--json"])
+    assert rc == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["current_decisions"] == {"rejected": 1}
+    assert preview["controller_hints"] == {"exclude_result": 1}
+    assert len(preview["actions"]) == 1
+    assert preview["actions"][0]["attempt_id"] == second.attempt_id
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "status", "--run-id", run_id, "--json"])
+    assert rc == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["verification_current"] == {"rejected": 1}
+    assert status["verifications"] == {"accepted": 1, "rejected": 1}
+
+
 def test_smi_releases_blocked_dependencies(tmp_path: Path) -> None:
     run_id = "deps"
     runtime = runtime_for(tmp_path, run_id)

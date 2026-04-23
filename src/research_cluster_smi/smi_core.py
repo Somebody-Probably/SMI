@@ -830,6 +830,7 @@ class SMIRuntime:
         decision: str | None = None,
         limit: int = 20,
         latest: bool = False,
+        current_attempts: bool = False,
     ) -> list[dict[str, Any]]:
         if decision is not None and decision not in {"accepted", "rejected", "held"}:
             raise ValueError(f"Unsupported verification decision: {decision}")
@@ -860,6 +861,34 @@ class SMIRuntime:
                   )
               )
             """
+        current_attempt_filter = ""
+        if current_attempts:
+            current_attempt_filter = """
+              AND EXISTS (
+                SELECT 1
+                FROM attempts AS current_attempt
+                JOIN tasks ON tasks.run_id=current_attempt.run_id
+                  AND tasks.task_id=current_attempt.task_id
+                WHERE current_attempt.run_id=verifications.run_id
+                  AND current_attempt.attempt_id=verifications.attempt_id
+                  AND current_attempt.status='completed'
+                  AND tasks.status='completed'
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM attempts AS newer_attempt
+                    WHERE newer_attempt.run_id=current_attempt.run_id
+                      AND newer_attempt.task_id=current_attempt.task_id
+                      AND newer_attempt.status='completed'
+                      AND (
+                        newer_attempt.completed_at > current_attempt.completed_at
+                        OR (
+                          newer_attempt.completed_at = current_attempt.completed_at
+                          AND newer_attempt.rowid > current_attempt.rowid
+                        )
+                      )
+                  )
+              )
+            """
         params.append(max(0, int(limit)))
         rows = self.conn.execute(
             f"""
@@ -874,7 +903,7 @@ class SMIRuntime:
                 evidence_json,
                 diagnostics
             FROM verifications
-            WHERE run_id=?{where}{latest_filter}
+            WHERE run_id=?{where}{latest_filter}{current_attempt_filter}
             ORDER BY verified_at DESC, rowid DESC
             LIMIT ?
             """,
@@ -917,6 +946,30 @@ class SMIRuntime:
             SELECT decision, COUNT(*) AS count
             FROM verifications
             WHERE run_id=?
+              AND EXISTS (
+                SELECT 1
+                FROM attempts AS current_attempt
+                JOIN tasks ON tasks.run_id=current_attempt.run_id
+                  AND tasks.task_id=current_attempt.task_id
+                WHERE current_attempt.run_id=verifications.run_id
+                  AND current_attempt.attempt_id=verifications.attempt_id
+                  AND current_attempt.status='completed'
+                  AND tasks.status='completed'
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM attempts AS newer_attempt
+                    WHERE newer_attempt.run_id=current_attempt.run_id
+                      AND newer_attempt.task_id=current_attempt.task_id
+                      AND newer_attempt.status='completed'
+                      AND (
+                        newer_attempt.completed_at > current_attempt.completed_at
+                        OR (
+                          newer_attempt.completed_at = current_attempt.completed_at
+                          AND newer_attempt.rowid > current_attempt.rowid
+                        )
+                      )
+                  )
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM verifications AS newer
                 WHERE newer.run_id=verifications.run_id
