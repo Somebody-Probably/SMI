@@ -106,6 +106,7 @@ def test_smi_verify_accepts_completed_dry_run(tmp_path: Path, capsys) -> None:
     try:
         summary = runtime.status_summary(run_id)
         assert summary["verification_pending"] == 0
+        assert summary["verification_current"] == {"accepted": 1}
         assert summary["verifications"] == {"accepted": 1}
         assert runtime.recent_events(run_id, message_type="verification.accepted")[-1]["task_id"] == "verify"
     finally:
@@ -324,6 +325,18 @@ def test_smi_verifications_latest_collapses_rechecks(tmp_path: Path, capsys) -> 
     assert len(latest_records) == 1
     assert latest_records[0]["task_id"] == "rechecked"
     assert latest_records[0]["decision"] == "rejected"
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "status", "--run-id", run_id, "--json"])
+    assert rc == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["verification_current"] == {"rejected": 1}
+    assert status["verifications"] == {"accepted": 1, "rejected": 1}
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "status", "--run-id", run_id])
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert "current:" in output
+    assert "records:" in output
 
 
 def test_smi_releases_blocked_dependencies(tmp_path: Path) -> None:

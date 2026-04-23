@@ -35,8 +35,8 @@ research-smi status --run-id <run-id>
 research-smi status --run-id <run-id> --json
 ```
 
-Status output also reports verification decision counts and the number of
-completed latest attempts still pending verification.
+Status output also reports verification audit counts, current latest-verification
+counts, and the number of completed latest attempts still pending verification.
 
 Use `events` for recent append-only transition records:
 
