@@ -17,7 +17,7 @@ from .agents import SUPPORTED_AGENT_PRESETS
 from .orders import OrderWatcher
 from .router import Router
 from .smi_core import DEFAULT_LANES, runtime_for, run_dir_for, utc_now
-from .verification import verify_completed_attempts
+from .verification import reconciliation_preview, verify_completed_attempts
 from .worker import WorkerManager
 
 
@@ -268,6 +268,31 @@ def cmd_verifications(args: argparse.Namespace) -> int:
             f"{record['verified_at']} {record['decision'].upper()} {record['task_id']} "
             f"attempt={record['attempt_id']} verification={record['verification_id']} "
             f"verifier={record['verifier']}{suffix}"
+        )
+    return 0
+
+
+def cmd_reconcile(args: argparse.Namespace) -> int:
+    runtime = runtime_for(args.run_root, args.run_id)
+    try:
+        preview = reconciliation_preview(runtime, args.run_id, limit=args.limit)
+    finally:
+        runtime.close()
+    if args.json:
+        print(json.dumps(preview, indent=2))
+        return 0
+    print(f"Reconciliation preview for run {preview['run_id']}")
+    print(f"Pending verification: {preview['pending_verification']}")
+    if not preview["actions"]:
+        print("No current verification records found.")
+        return 0
+    for action in preview["actions"]:
+        diagnostics = action.get("diagnostics") or ""
+        suffix = f": {diagnostics}" if diagnostics else ""
+        print(
+            f"  {action['decision'].upper()} {action['task_id']} "
+            f"attempt={action['attempt_id']} hint={action['controller_hint']} "
+            f"verification={action['verification_id']}{suffix}"
         )
     return 0
 
@@ -816,6 +841,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--latest", action="store_true", help="Show only the latest verification record for each attempt.")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_verifications)
+
+    p = sub.add_parser("reconcile", help="Preview controller actions from current verification records.")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--limit", type=int, default=1000)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_reconcile)
 
     p = sub.add_parser("worker", help="Run one lane worker manager.")
     p.add_argument("--run-id", required=True)
