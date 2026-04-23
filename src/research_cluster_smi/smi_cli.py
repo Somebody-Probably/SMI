@@ -253,6 +253,39 @@ def cmd_cancel_attempt(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def cmd_attempts(args: argparse.Namespace) -> int:
+    runtime = runtime_for(args.run_root, args.run_id)
+    try:
+        attempts = runtime.attempt_records(
+            args.run_id,
+            task_id=args.task_id,
+            status=args.status,
+            failure_class=args.failure_class,
+            limit=args.limit,
+        )
+    finally:
+        runtime.close()
+    payload = {
+        "run_id": args.run_id,
+        "count": len(attempts),
+        "attempts": attempts,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return 0
+    if not attempts:
+        print("No attempts found.")
+        return 0
+    for attempt in attempts:
+        failure = f" failure_class={attempt['failure_class']}" if attempt.get("failure_class") else ""
+        diagnostics = f": {attempt['diagnostics']}" if attempt.get("diagnostics") else ""
+        print(
+            f"{attempt['status'].upper()} {attempt['task_id']} attempt={attempt['attempt_id']} "
+            f"lane={attempt['lane']} slot={attempt['slot_id']}{failure}{diagnostics}"
+        )
+    return 0
+
+
 def cmd_seed(args: argparse.Namespace) -> int:
     runtime = runtime_for(args.run_root, args.run_id)
     try:
@@ -946,6 +979,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fail-on-canceled", action="store_true", help="Exit nonzero when the attempt is canceled.")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_cancel_attempt)
+
+    p = sub.add_parser("attempts", help="Show attempt records.")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--task-id", help="Filter by task.")
+    p.add_argument("--status", choices=("pending", "running", "completed", "failed"), help="Filter by attempt status.")
+    p.add_argument("--failure-class", help="Filter by failure class.")
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_attempts)
 
     p = sub.add_parser("seed", help="Seed tasks from a JSON spec.")
     p.add_argument("--run-id", required=True)

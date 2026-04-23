@@ -318,6 +318,61 @@ def test_smi_cancel_attempt_cli_marks_attempt_canceled(tmp_path: Path, capsys) -
     assert "No cancelable attempt found." in capsys.readouterr().out
 
 
+def test_smi_attempts_cli_filters_attempt_records(tmp_path: Path, capsys) -> None:
+    run_id = "attempt-ledger-cli"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        runtime.seed_task(run_id, "fast_local", task_id="completed")
+        runtime.seed_task(run_id, "fast_local", task_id="canceled")
+        worker = WorkerManager(runtime, run_id, "fast_local", slots=1, dry_run=True)
+        worker.register_slots()
+        assert worker.tick() == {"started": 1, "completed": 1}
+        assignment = runtime.claim_next_task(run_id, "fast_local-00")
+        assert assignment is not None
+        runtime.start_attempt(run_id, assignment.attempt_id)
+        canceled = runtime.cancel_attempt(
+            run_id,
+            assignment.attempt_id,
+            diagnostics="ledger test cancel",
+        )
+        assert canceled is not None
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "attempts", "--run-id", run_id, "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 2
+    assert {attempt["status"] for attempt in payload["attempts"]} == {"completed", "failed"}
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "attempts",
+            "--run-id",
+            run_id,
+            "--status",
+            "failed",
+            "--failure-class",
+            "attempt_canceled",
+            "--json",
+        ]
+    )
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 1
+    assert payload["attempts"][0]["task_id"] == "canceled"
+    assert payload["attempts"][0]["diagnostics"] == "ledger test cancel"
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "attempts", "--run-id", run_id, "--task-id", "completed"])
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert "COMPLETED completed" in output
+    assert "attempt=" in output
+
+
 def test_smi_events_cli_renders_recent_events(tmp_path: Path, capsys) -> None:
     run_id = "events-cli"
     runtime = runtime_for(tmp_path, run_id)
