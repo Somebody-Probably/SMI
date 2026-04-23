@@ -36,7 +36,8 @@ research-smi status --run-id <run-id> --json
 ```
 
 Status output also reports verification audit counts, current latest-verification
-counts, and the number of completed latest attempts still pending verification.
+counts for each task's newest completed attempt, and the number of completed
+latest attempts still pending verification.
 
 Use `events` for recent append-only transition records:
 
@@ -103,7 +104,8 @@ research-smi reconcile --run-id <run-id>
 research-smi reconcile --run-id <run-id> --json
 ```
 
-The preview maps accepted records to `use_result`, rejected records to
+The preview uses current verification records for each task's newest completed
+attempt. It maps accepted records to `use_result`, rejected records to
 `exclude_result`, and held records to `review_result`. It does not mutate task
 state, retry queues, dependency release, or reports.
 
