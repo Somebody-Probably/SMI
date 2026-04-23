@@ -31,6 +31,7 @@ def test_smi_dry_run_smoke(tmp_path: Path) -> None:
         assert summary == {"started": 1, "completed": 1}
         status = runtime.status_summary(run_id)
         assert status["tasks"]["completed"] == 1
+        assert status["verification_pending"] == 1
         result_path = runtime.run_dir / "results" / "hello" / "result.json"
         result = json.loads(result_path.read_text(encoding="utf-8"))
         assert result["type"] == "dry_run"
@@ -92,6 +93,7 @@ def test_smi_verify_accepts_completed_dry_run(tmp_path: Path, capsys) -> None:
         worker = WorkerManager(runtime, run_id, "fast_local", slots=1, dry_run=True)
         worker.register_slots()
         assert worker.tick() == {"started": 1, "completed": 1}
+        assert runtime.status_summary(run_id)["verification_pending"] == 1
     finally:
         runtime.close()
 
@@ -102,7 +104,9 @@ def test_smi_verify_accepts_completed_dry_run(tmp_path: Path, capsys) -> None:
     assert "ACCEPTED verify" in output
     runtime = runtime_for(tmp_path, run_id)
     try:
-        assert runtime.status_summary(run_id)["verifications"] == {"accepted": 1}
+        summary = runtime.status_summary(run_id)
+        assert summary["verification_pending"] == 0
+        assert summary["verifications"] == {"accepted": 1}
         assert runtime.recent_events(run_id, message_type="verification.accepted")[-1]["task_id"] == "verify"
     finally:
         runtime.close()
