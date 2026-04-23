@@ -17,6 +17,7 @@ from .agents import SUPPORTED_AGENT_PRESETS
 from .orders import OrderWatcher
 from .router import Router
 from .smi_core import DEFAULT_LANES, runtime_for, run_dir_for, utc_now
+from .verification import verify_completed_attempts
 from .worker import WorkerManager
 
 
@@ -132,6 +133,10 @@ def cmd_status(args: argparse.Namespace) -> int:
                 f"  {lease['lease_id']} task={lease['task_id']} slot={lease['slot_id']} "
                 f"expires={lease['expires_at']}"
             )
+    if summary.get("verifications"):
+        print("Verifications:")
+        for decision, count in sorted(summary["verifications"].items()):
+            print(f"  {decision:<14} {count}")
     return 0
 
 
@@ -189,6 +194,45 @@ def cmd_events(args: argparse.Namespace) -> int:
             subject_text = " " + subject_text
         print(f"{event['sequence_no']:>5} {event['timestamp']} {event['message_type']}{subject_text}{payload_text}")
     return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    runtime = runtime_for(args.run_root, args.run_id)
+    try:
+        outcomes = verify_completed_attempts(
+            runtime,
+            args.run_id,
+            task_id=args.task_id,
+            verifier=args.verifier,
+            artifact_root=args.artifact_root,
+            require_artifacts=args.require_artifacts,
+            include_verified=args.include_verified,
+        )
+    finally:
+        runtime.close()
+    payload = [
+        {
+            "task_id": outcome.task_id,
+            "attempt_id": outcome.attempt_id,
+            "decision": outcome.decision,
+            "verification_id": outcome.verification_id,
+            "diagnostics": outcome.diagnostics,
+            "evidence": outcome.evidence,
+        }
+        for outcome in outcomes
+    ]
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return 0
+    if not outcomes:
+        print("No completed attempts pending verification.")
+        return 0
+    for outcome in outcomes:
+        print(
+            f"{outcome.decision.upper()} {outcome.task_id} "
+            f"attempt={outcome.attempt_id} verification={outcome.verification_id}: {outcome.diagnostics}"
+        )
+    return 1 if any(outcome.decision == "rejected" for outcome in outcomes) else 0
 
 
 def cmd_worker(args: argparse.Namespace) -> int:
@@ -715,6 +759,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--type", help="Filter by event message_type.")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_events)
+
+    p = sub.add_parser("verify", help="Record neutral verification decisions for completed attempts.")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--task-id", help="Verify only one task.")
+    p.add_argument("--verifier", default="neutral")
+    p.add_argument("--artifact-root", help="Root used for relative expected artifact checks. Defaults to run dir.")
+    p.add_argument("--require-artifacts", action="store_true", help="Hold tasks when declared artifacts are missing.")
+    p.add_argument("--include-verified", action="store_true", help="Create another verification for already verified attempts.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_verify)
 
     p = sub.add_parser("worker", help="Run one lane worker manager.")
     p.add_argument("--run-id", required=True)

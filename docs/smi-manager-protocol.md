@@ -44,6 +44,31 @@ research-smi events --run-id <run-id> --type lease.expired --json
 
 The event log is also mirrored as JSONL at `runs/<run-id>/events.jsonl`.
 
+## Verification Records
+
+Task execution and task acceptance are separate. A worker can complete an
+attempt, but a verifier records whether that completed attempt should be
+accepted, rejected, or held for review:
+
+```bash
+research-smi verify --run-id <run-id>
+research-smi verify --run-id <run-id> --task-id <task-id> --json
+```
+
+The first neutral verifier checks completed attempts and records evidence in the
+SQLite `verifications` table plus a `verification.<decision>` event. By default,
+it accepts completed attempts that have no failed process result. Use
+`--require-artifacts` to hold attempts whose declared `write_set` entries or
+`metadata.expected_output` paths are missing:
+
+```bash
+research-smi verify --run-id <run-id> --require-artifacts
+```
+
+This initial verifier records decisions without changing dependency behavior.
+Downstream reconciliation can later decide how accepted, rejected, and held
+records should affect merges, retries, and public reports.
+
 ## Task Spec
 
 ```json
