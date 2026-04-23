@@ -565,6 +565,25 @@ def test_smi_events_filter_by_controller_identity(tmp_path: Path, capsys) -> Non
             run_id,
             "--controller",
             "controller-beta",
+            "--jsonl",
+        ]
+    )
+    assert rc == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1
+    jsonl_event = json.loads(lines[0])
+    assert jsonl_event["message_type"] == "task.seeded"
+    assert jsonl_event["controller_id"] == "controller-beta"
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "events",
+            "--run-id",
+            run_id,
+            "--controller",
+            "controller-beta",
         ]
     )
     assert rc == 0

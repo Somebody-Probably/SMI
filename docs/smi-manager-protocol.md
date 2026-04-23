@@ -44,10 +44,12 @@ Use `events` for recent append-only transition records:
 ```bash
 research-smi events --run-id <run-id> --limit 20
 research-smi events --run-id <run-id> --type lease.expired --json
+research-smi events --run-id <run-id> --controller root-supervisor --jsonl
 research-smi events --run-id <run-id> --controller root-supervisor --json
 ```
 
 The event log is also mirrored as JSONL at `runs/<run-id>/events.jsonl`.
+Use `events --jsonl` for filtered one-event-per-line output.
 
 Use `--controller-id` or `SMI_CONTROLLER_ID` to stamp emitted runtime events
 with the controller responsible for the action:
