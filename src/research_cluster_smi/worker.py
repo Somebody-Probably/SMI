@@ -35,6 +35,21 @@ def agent_subprocess_command(command: str) -> tuple[list[str] | str, bool]:
     return shlex.split(command), False
 
 
+def agent_failure_class(returncode: int) -> str:
+    if returncode < 0:
+        return "agent_process_terminated"
+    return "agent_command_failed"
+
+
+def agent_failure_diagnostics(returncode: int, stdout: str, stderr: str) -> str:
+    diagnostics = stderr or stdout
+    if diagnostics:
+        return diagnostics
+    if returncode < 0:
+        return f"Agent process terminated by signal {-returncode}."
+    return f"Agent command exited with return code {returncode}."
+
+
 class WorkerManager:
     """Claim tasks for one lane and execute them."""
 
@@ -295,8 +310,8 @@ class WorkerManager:
                 self.runtime.fail_attempt(
                     self.run_id,
                     attempt_id,
-                    failure_class="agent_command_failed",
-                    diagnostics=stderr or stdout,
+                    failure_class=agent_failure_class(returncode),
+                    diagnostics=agent_failure_diagnostics(returncode, stdout, stderr),
                     retryable=True,
                 )
             self._release_account_permit(active.account_permit)
@@ -366,8 +381,8 @@ class WorkerManager:
             self.runtime.fail_attempt(
                 self.run_id,
                 attempt_id,
-                failure_class="agent_command_failed",
-                diagnostics=completed.stderr or completed.stdout,
+                failure_class=agent_failure_class(completed.returncode),
+                diagnostics=agent_failure_diagnostics(completed.returncode, completed.stdout, completed.stderr),
                 retryable=True,
             )
             return False
