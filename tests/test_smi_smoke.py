@@ -438,6 +438,45 @@ def test_smi_reconcile_previews_current_verifier_actions(tmp_path: Path, capsys)
     assert "hint=exclude_result" in output
 
 
+def test_smi_reconcile_can_gate_pending_verification(tmp_path: Path, capsys) -> None:
+    run_id = "verification-pending-gate"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        runtime.seed_task(run_id, "fast_local", task_id="pending-gate")
+        worker = WorkerManager(runtime, run_id, "fast_local", slots=1, dry_run=True)
+        worker.register_slots()
+        assert worker.tick() == {"started": 1, "completed": 1}
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "reconcile", "--run-id", run_id, "--json"])
+    assert rc == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["pending_verification"] == 1
+    assert preview["actions"] == []
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "reconcile",
+            "--run-id",
+            run_id,
+            "--fail-on-pending",
+            "--json",
+        ]
+    )
+    assert rc == 1
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["pending_verification"] == 1
+    assert preview["actions"] == []
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "reconcile", "--run-id", run_id, "--fail-on-pending"])
+    assert rc == 1
+    assert "Pending verification: 1" in capsys.readouterr().out
+
+
 def test_smi_reconcile_ignores_stale_completed_attempts(tmp_path: Path, capsys) -> None:
     run_id = "verification-current-attempt"
     runtime = runtime_for(tmp_path, run_id)
