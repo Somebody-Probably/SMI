@@ -285,9 +285,11 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         )
     finally:
         runtime.close()
+    fail_on_hints = set(args.fail_on_hint or [])
+    exit_code = 1 if any(preview["controller_hints"].get(hint, 0) for hint in fail_on_hints) else 0
     if args.json:
         print(json.dumps(preview, indent=2))
-        return 0
+        return exit_code
     print(f"Reconciliation preview for run {preview['run_id']}")
     print(f"Pending verification: {preview['pending_verification']}")
     if not preview["actions"]:
@@ -301,7 +303,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             f"attempt={action['attempt_id']} hint={action['controller_hint']} "
             f"verification={action['verification_id']}{suffix}"
         )
-    return 0
+    return exit_code
 
 
 def cmd_worker(args: argparse.Namespace) -> int:
@@ -854,6 +856,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--task-id", help="Filter by task.")
     p.add_argument("--decision", choices=("accepted", "rejected", "held"), help="Filter by decision.")
     p.add_argument("--hint", choices=("use_result", "exclude_result", "review_result"), help="Filter by controller hint.")
+    p.add_argument(
+        "--fail-on-hint",
+        action="append",
+        choices=("use_result", "exclude_result", "review_result"),
+        help="Exit nonzero if the preview contains this controller hint. Can be repeated.",
+    )
     p.add_argument("--limit", type=int, default=1000)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_reconcile)
