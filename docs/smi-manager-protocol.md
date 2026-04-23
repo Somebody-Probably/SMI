@@ -227,6 +227,19 @@ research-smi leases --run-id <run-id> --expiring-within-seconds 30 --fail-on-mat
 The command is read-only. `--fail-on-match` makes automation exit nonzero when
 any active lease matches the selected stale-heartbeat or expiry filters.
 
+When a controller is ready to mutate state, use `expire-leases` to reap only
+active leases whose deadlines have already passed:
+
+```bash
+research-smi expire-leases --run-id <run-id>
+research-smi expire-leases --run-id <run-id> --lane fast_local --fail-on-expired --json
+```
+
+This command uses the same expiry path that workers run before claiming more
+work. Expired leases are marked `expired`, their attempts are failed with
+`failure_class=lease_expired`, their tasks return to `retry_ready`, their slots
+return to `idle`, and `lease.expired` events are recorded.
+
 ## Agent Workers
 
 Workers can run a CLI agent for each claimed task. The backward-compatible

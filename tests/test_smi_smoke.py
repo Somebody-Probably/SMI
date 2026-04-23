@@ -132,6 +132,76 @@ def test_smi_leases_filters_and_gates_active_leases(tmp_path: Path, capsys) -> N
     assert "No active leases matched." in capsys.readouterr().out
 
 
+def test_smi_expire_leases_cli_requeues_expired_task(tmp_path: Path, capsys) -> None:
+    run_id = "lease-expire-cli"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        runtime.register_slot(run_id, "fast_local", "fast_local-00")
+        runtime.seed_task(run_id, "fast_local", task_id="expired")
+        assignment = runtime.claim_next_task(run_id, "fast_local-00")
+        assert assignment is not None
+        runtime.start_attempt(run_id, assignment.attempt_id)
+        with runtime.conn:
+            runtime.conn.execute(
+                "UPDATE leases SET expires_at=? WHERE run_id=? AND lease_id=?",
+                ("2000-01-01T00:00:00.000Z", run_id, assignment.lease_id),
+            )
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "expire-leases",
+            "--run-id",
+            run_id,
+            "--lane",
+            "fast_local",
+            "--fail-on-expired",
+            "--json",
+        ]
+    )
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["expired_count"] == 1
+    assert payload["expired_leases"][0]["task_id"] == "expired"
+
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        task = runtime.conn.execute(
+            "SELECT status FROM tasks WHERE run_id=? AND task_id=?",
+            (run_id, "expired"),
+        ).fetchone()
+        attempt = runtime.conn.execute(
+            "SELECT status, failure_class FROM attempts WHERE run_id=? AND attempt_id=?",
+            (run_id, assignment.attempt_id),
+        ).fetchone()
+        slot = runtime.conn.execute(
+            "SELECT status, current_lease_id FROM slots WHERE run_id=? AND slot_id=?",
+            (run_id, "fast_local-00"),
+        ).fetchone()
+        assert task["status"] == "retry_ready"
+        assert dict(attempt) == {"status": "failed", "failure_class": "lease_expired"}
+        assert dict(slot) == {"status": "idle", "current_lease_id": None}
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "expire-leases",
+            "--run-id",
+            run_id,
+            "--fail-on-expired",
+        ]
+    )
+    assert rc == 0
+    assert "No expired active leases found." in capsys.readouterr().out
+
+
 def test_smi_events_cli_renders_recent_events(tmp_path: Path, capsys) -> None:
     run_id = "events-cli"
     runtime = runtime_for(tmp_path, run_id)

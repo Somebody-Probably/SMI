@@ -195,6 +195,33 @@ def cmd_leases(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def cmd_expire_leases(args: argparse.Namespace) -> int:
+    runtime = runtime_for(args.run_root, args.run_id)
+    try:
+        expired = runtime.expire_stale_leases(args.run_id, lane=args.lane)
+    finally:
+        runtime.close()
+    payload = {
+        "run_id": args.run_id,
+        "lane": args.lane,
+        "expired_count": len(expired),
+        "expired_leases": expired,
+    }
+    exit_code = 1 if args.fail_on_expired and expired else 0
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return exit_code
+    if not expired:
+        print("No expired active leases found.")
+        return exit_code
+    for lease in expired:
+        print(
+            f"EXPIRED {lease['lease_id']} task={lease['task_id']} lane={lease['lane']} "
+            f"slot={lease['slot_id']} previous_expires_at={lease['expires_at']}"
+        )
+    return exit_code
+
+
 def cmd_seed(args: argparse.Namespace) -> int:
     runtime = runtime_for(args.run_root, args.run_id)
     try:
@@ -872,6 +899,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fail-on-match", action="store_true", help="Exit nonzero if any active lease matches the filters.")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_leases)
+
+    p = sub.add_parser("expire-leases", help="Expire active leases whose deadlines have passed.")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--lane", help="Only expire leases in this lane.")
+    p.add_argument("--fail-on-expired", action="store_true", help="Exit nonzero if any lease is expired.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_expire_leases)
 
     p = sub.add_parser("seed", help="Seed tasks from a JSON spec.")
     p.add_argument("--run-id", required=True)
