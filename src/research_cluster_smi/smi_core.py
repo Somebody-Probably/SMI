@@ -1362,12 +1362,19 @@ class SMIRuntime:
         *,
         limit: int = 20,
         message_type: str | None = None,
+        controller_id: str | None = None,
     ) -> list[dict[str, Any]]:
         params: list[Any] = [run_id]
-        type_filter = ""
+        filters = []
         if message_type:
-            type_filter = " AND message_type=?"
+            filters.append("message_type=?")
             params.append(message_type)
+        if controller_id:
+            filters.append("controller_id=?")
+            params.append(controller_id)
+        filter_sql = "".join(
+            f"\n              AND {filter_clause}" for filter_clause in filters
+        )
         params.append(limit)
         rows = self.conn.execute(
             f"""
@@ -1386,7 +1393,7 @@ class SMIRuntime:
                 payload_json
             FROM events
             WHERE run_id=?
-              {type_filter}
+              {filter_sql}
             ORDER BY sequence_no DESC
             LIMIT ?
             """,

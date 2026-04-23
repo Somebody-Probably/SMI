@@ -44,6 +44,7 @@ Use `events` for recent append-only transition records:
 ```bash
 research-smi events --run-id <run-id> --limit 20
 research-smi events --run-id <run-id> --type lease.expired --json
+research-smi events --run-id <run-id> --controller root-supervisor --json
 ```
 
 The event log is also mirrored as JSONL at `runs/<run-id>/events.jsonl`.
@@ -57,8 +58,9 @@ research-smi --controller-id verifier-loop verify --run-id <run-id>
 ```
 
 The controller id is recorded in SQLite event rows, in `events.jsonl`, and in
-`research-smi events` text and JSON output. Existing run databases are upgraded
-with the event column when opened by the runtime.
+`research-smi events` text and JSON output. Use `events --controller` to inspect
+only events emitted under one controller identity. Existing run databases are
+upgraded with the event column when opened by the runtime.
 
 ## Verification Records
 

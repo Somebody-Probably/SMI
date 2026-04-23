@@ -365,7 +365,12 @@ def cmd_orders(args: argparse.Namespace) -> int:
 def cmd_events(args: argparse.Namespace) -> int:
     runtime = runtime_from_args(args)
     try:
-        events = runtime.recent_events(args.run_id, limit=args.limit, message_type=args.type)
+        events = runtime.recent_events(
+            args.run_id,
+            limit=args.limit,
+            message_type=args.type,
+            controller_id=args.controller,
+        )
     finally:
         runtime.close()
     if args.json:
@@ -1073,6 +1078,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-id", required=True)
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--type", help="Filter by event message_type.")
+    p.add_argument("--controller", help="Filter by event controller_id.")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_events)
 
