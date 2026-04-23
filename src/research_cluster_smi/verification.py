@@ -26,6 +26,7 @@ CONTROLLER_HINTS = {
     "rejected": "exclude_result",
     "held": "review_result",
 }
+HINT_DECISIONS = {value: key for key, value in CONTROLLER_HINTS.items()}
 
 
 def expected_artifacts(attempt: dict[str, Any]) -> list[str]:
@@ -156,12 +157,36 @@ def verify_completed_attempts(
     return outcomes
 
 
-def reconciliation_preview(runtime: SMIRuntime, run_id: str, *, limit: int = 1000) -> dict[str, Any]:
-    records = runtime.verification_records(run_id, latest=True, current_attempts=True, limit=limit)
+def reconciliation_preview(
+    runtime: SMIRuntime,
+    run_id: str,
+    *,
+    task_id: str | None = None,
+    decision: str | None = None,
+    hint: str | None = None,
+    limit: int = 1000,
+) -> dict[str, Any]:
+    if hint is not None:
+        if hint not in HINT_DECISIONS:
+            raise ValueError(f"Unsupported controller hint: {hint}")
+        hint_decision = HINT_DECISIONS[hint]
+        if decision is not None and decision != hint_decision:
+            raise ValueError(f"Decision {decision} does not match controller hint {hint}.")
+        decision = hint_decision
+    records = runtime.verification_records(
+        run_id,
+        task_id=task_id,
+        decision=decision,
+        latest=True,
+        current_attempts=True,
+        limit=limit,
+    )
     actions = []
+    decision_counts: dict[str, int] = {}
     hint_counts: dict[str, int] = {}
     for record in records:
         hint = CONTROLLER_HINTS[record["decision"]]
+        decision_counts[record["decision"]] = decision_counts.get(record["decision"], 0) + 1
         hint_counts[hint] = hint_counts.get(hint, 0) + 1
         actions.append(
             {
@@ -178,7 +203,7 @@ def reconciliation_preview(runtime: SMIRuntime, run_id: str, *, limit: int = 100
     return {
         "run_id": run_id,
         "pending_verification": runtime.pending_verification_count(run_id),
-        "current_decisions": runtime.current_verification_counts(run_id),
+        "current_decisions": decision_counts,
         "controller_hints": hint_counts,
         "actions": actions,
     }
