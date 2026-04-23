@@ -102,6 +102,7 @@ verification records:
 ```bash
 research-smi reconcile --run-id <run-id>
 research-smi reconcile --run-id <run-id> --hint exclude_result
+research-smi reconcile --run-id <run-id> --fail-on-hint exclude_result --json
 research-smi reconcile --run-id <run-id> --json
 ```
 
@@ -109,7 +110,9 @@ The preview uses current verification records for each task's newest completed
 attempt. It maps accepted records to `use_result`, rejected records to
 `exclude_result`, and held records to `review_result`. It does not mutate task
 state, retry queues, dependency release, or reports. Use `--task-id`,
-`--decision`, or `--hint` to preview a focused subset.
+`--decision`, or `--hint` to preview a focused subset. Use `--fail-on-hint` to
+make automation exit nonzero when a selected hint is present while still
+emitting the preview.
 
 This initial verifier records decisions without changing dependency behavior.
 Downstream reconciliation can later decide how accepted, rejected, and held
