@@ -366,6 +366,23 @@ def test_smi_attempts_cli_filters_attempt_records(tmp_path: Path, capsys) -> Non
     assert payload["attempts"][0]["task_id"] == "canceled"
     assert payload["attempts"][0]["diagnostics"] == "ledger test cancel"
 
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "attempts",
+            "--run-id",
+            run_id,
+            "--status",
+            "failed",
+            "--jsonl",
+        ]
+    )
+    assert rc == 0
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(records) == 1
+    assert records[0]["failure_class"] == "attempt_canceled"
+
     rc = smi_cli.main(["--run-root", str(tmp_path), "attempts", "--run-id", run_id, "--task-id", "completed"])
     assert rc == 0
     output = capsys.readouterr().out
@@ -431,6 +448,24 @@ def test_smi_tasks_cli_filters_task_records(tmp_path: Path, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["count"] == 1
     assert payload["tasks"][0]["task_id"] == "blocked"
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "tasks",
+            "--run-id",
+            run_id,
+            "--lane",
+            "remote_transfer",
+            "--jsonl",
+        ]
+    )
+    assert rc == 0
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert len(records) == 1
+    assert records[0]["task_id"] == "blocked"
+    assert records[0]["dependencies"] == ["completed"]
 
     rc = smi_cli.main(["--run-root", str(tmp_path), "tasks", "--run-id", run_id, "--task-id", "completed"])
     assert rc == 0

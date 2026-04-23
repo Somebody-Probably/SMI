@@ -260,21 +260,25 @@ Use `attempts` for direct attempt-ledger inspection:
 ```bash
 research-smi attempts --run-id <run-id>
 research-smi attempts --run-id <run-id> --status failed --failure-class attempt_canceled --json
+research-smi attempts --run-id <run-id> --jsonl
 ```
 
 The command is read-only and supports filtering by task, attempt status, and
-failure class. JSON output includes parsed attempt result packets.
+failure class. JSON output includes parsed attempt result packets; JSONL output
+emits one attempt record per line for telemetry snapshots.
 
 Use `tasks` for direct task-ledger inspection:
 
 ```bash
 research-smi tasks --run-id <run-id>
 research-smi tasks --run-id <run-id> --lane fast_local --status ready --json
+research-smi tasks --run-id <run-id> --jsonl
 ```
 
 The command is read-only and supports filtering by task, lane, and task status.
 JSON output includes parsed dependencies, write sets, metadata, attempt counts,
-and latest-attempt hints.
+and latest-attempt hints; JSONL output emits one task record per line for
+telemetry snapshots.
 
 ## Agent Workers
 
