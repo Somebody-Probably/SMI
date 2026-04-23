@@ -21,6 +21,13 @@ class VerificationOutcome:
     evidence: dict[str, Any]
 
 
+CONTROLLER_HINTS = {
+    "accepted": "use_result",
+    "rejected": "exclude_result",
+    "held": "review_result",
+}
+
+
 def expected_artifacts(attempt: dict[str, Any]) -> list[str]:
     artifacts = list(attempt.get("write_set") or [])
     metadata = attempt.get("metadata") or {}
@@ -147,3 +154,31 @@ def verify_completed_attempts(
             )
         )
     return outcomes
+
+
+def reconciliation_preview(runtime: SMIRuntime, run_id: str, *, limit: int = 1000) -> dict[str, Any]:
+    records = runtime.verification_records(run_id, latest=True, limit=limit)
+    actions = []
+    hint_counts: dict[str, int] = {}
+    for record in records:
+        hint = CONTROLLER_HINTS[record["decision"]]
+        hint_counts[hint] = hint_counts.get(hint, 0) + 1
+        actions.append(
+            {
+                "task_id": record["task_id"],
+                "attempt_id": record["attempt_id"],
+                "verification_id": record["verification_id"],
+                "decision": record["decision"],
+                "controller_hint": hint,
+                "verified_at": record["verified_at"],
+                "verifier": record["verifier"],
+                "diagnostics": record.get("diagnostics") or "",
+            }
+        )
+    return {
+        "run_id": run_id,
+        "pending_verification": runtime.pending_verification_count(run_id),
+        "current_decisions": runtime.current_verification_counts(run_id),
+        "controller_hints": hint_counts,
+        "actions": actions,
+    }

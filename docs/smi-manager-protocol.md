@@ -95,6 +95,18 @@ verifier, timestamp, diagnostics, and evidence packet. Use `--latest` when a
 task has been rechecked and the controller only needs the current record for
 each attempt.
 
+Use `reconcile` for a read-only preview of controller hints derived from current
+verification records:
+
+```bash
+research-smi reconcile --run-id <run-id>
+research-smi reconcile --run-id <run-id> --json
+```
+
+The preview maps accepted records to `use_result`, rejected records to
+`exclude_result`, and held records to `review_result`. It does not mutate task
+state, retry queues, dependency release, or reports.
+
 This initial verifier records decisions without changing dependency behavior.
 Downstream reconciliation can later decide how accepted, rejected, and held
 records should affect merges, retries, and public reports.

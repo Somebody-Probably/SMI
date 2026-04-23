@@ -339,6 +339,56 @@ def test_smi_verifications_latest_collapses_rechecks(tmp_path: Path, capsys) -> 
     assert "records:" in output
 
 
+def test_smi_reconcile_previews_current_verifier_actions(tmp_path: Path, capsys) -> None:
+    run_id = "verification-reconcile"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        runtime.seed_task(run_id, "fast_local", task_id="reconcile-me")
+        worker = WorkerManager(runtime, run_id, "fast_local", slots=1, dry_run=True)
+        worker.register_slots()
+        assert worker.tick() == {"started": 1, "completed": 1}
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "verify", "--run-id", run_id, "--json"])
+    assert rc == 0
+    capsys.readouterr()
+
+    validation_command = f'"{sys.executable}" -c "import sys; sys.exit(7)"'
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "verify",
+            "--run-id",
+            run_id,
+            "--include-verified",
+            "--validation-command",
+            validation_command,
+            "--json",
+        ]
+    )
+    assert rc == 1
+    capsys.readouterr()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "reconcile", "--run-id", run_id, "--json"])
+    assert rc == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert preview["pending_verification"] == 0
+    assert preview["current_decisions"] == {"rejected": 1}
+    assert preview["controller_hints"] == {"exclude_result": 1}
+    assert len(preview["actions"]) == 1
+    assert preview["actions"][0]["task_id"] == "reconcile-me"
+    assert preview["actions"][0]["controller_hint"] == "exclude_result"
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "reconcile", "--run-id", run_id])
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert "REJECTED reconcile-me" in output
+    assert "hint=exclude_result" in output
+
+
 def test_smi_releases_blocked_dependencies(tmp_path: Path) -> None:
     run_id = "deps"
     runtime = runtime_for(tmp_path, run_id)
