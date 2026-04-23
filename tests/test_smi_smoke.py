@@ -592,6 +592,38 @@ def test_smi_events_filter_by_controller_identity(tmp_path: Path, capsys) -> Non
     assert "controller=controller-beta" in output
     assert "run.initialized" not in output
 
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "events",
+            "--run-id",
+            run_id,
+            "--controller",
+            "controller-beta",
+            "--fail-on-match",
+            "--json",
+        ]
+    )
+    assert rc == 1
+    events = json.loads(capsys.readouterr().out)
+    assert [event["message_type"] for event in events] == ["task.seeded"]
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "events",
+            "--run-id",
+            run_id,
+            "--controller",
+            "missing-controller",
+            "--fail-on-match",
+        ]
+    )
+    assert rc == 0
+    assert "No events found." in capsys.readouterr().out
+
 
 def test_smi_runtime_adds_controller_column_to_legacy_events_table(tmp_path: Path) -> None:
     run_id = "legacy-controller-column"

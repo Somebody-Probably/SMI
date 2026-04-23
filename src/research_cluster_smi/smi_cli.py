@@ -373,12 +373,13 @@ def cmd_events(args: argparse.Namespace) -> int:
         )
     finally:
         runtime.close()
+    exit_code = 1 if args.fail_on_match and events else 0
     if args.json:
         print(json.dumps(events, indent=2))
-        return 0
+        return exit_code
     if args.jsonl:
         print_jsonl(events)
-        return 0
+        return exit_code
     if not events:
         print("No events found.")
         return 0
@@ -400,7 +401,7 @@ def cmd_events(args: argparse.Namespace) -> int:
         if subject_text:
             subject_text = " " + subject_text
         print(f"{event['sequence_no']:>5} {event['timestamp']} {event['message_type']}{subject_text}{payload_text}")
-    return 0
+    return exit_code
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
@@ -1082,6 +1083,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--type", help="Filter by event message_type.")
     p.add_argument("--controller", help="Filter by event controller_id.")
+    p.add_argument("--fail-on-match", action="store_true", help="Exit nonzero if any event matches the filters.")
     out = p.add_mutually_exclusive_group()
     out.add_argument("--json", action="store_true")
     out.add_argument("--jsonl", action="store_true")
