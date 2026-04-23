@@ -1,9 +1,11 @@
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 from research_cluster_smi import smi_cli
+from research_cluster_smi import worker as worker_module
 from research_cluster_smi.account_gate import AccountGate, account_gate_path
 from research_cluster_smi.orders import OrderWatcher
 from research_cluster_smi.smi_core import runtime_for
@@ -932,6 +934,39 @@ def test_parallel_worker_heartbeats_active_lease(tmp_path: Path) -> None:
             completed += worker.tick(start_new=False)["completed"]
         assert completed == 1
         assert runtime.status_summary(run_id)["tasks"]["completed"] == 1
+    finally:
+        runtime.close()
+
+
+def test_worker_records_terminated_agent_failure_class(tmp_path: Path, monkeypatch) -> None:
+    run_id = "agent-terminated"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        prompt = runtime.run_dir / "prompts" / "terminated.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("terminate me", encoding="utf-8")
+        runtime.seed_task(run_id, "fast_local", task_id="terminated", prompt_path=str(prompt))
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args=args[0], returncode=-9, stdout="", stderr="")
+
+        monkeypatch.setattr(worker_module.subprocess, "run", fake_run)
+        worker = WorkerManager(runtime, run_id, "fast_local", slots=1, agent_command="fake-agent")
+        worker.register_slots()
+
+        assert worker.tick() == {"started": 1, "completed": 0}
+        attempt = runtime.conn.execute(
+            """
+            SELECT status, failure_class, diagnostics
+            FROM attempts
+            WHERE run_id=? AND task_id=?
+            """,
+            (run_id, "terminated"),
+        ).fetchone()
+        assert attempt["status"] == "failed"
+        assert attempt["failure_class"] == "agent_process_terminated"
+        assert "signal 9" in attempt["diagnostics"]
     finally:
         runtime.close()
 

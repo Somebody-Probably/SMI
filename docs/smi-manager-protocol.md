@@ -256,6 +256,15 @@ research-smi worker \
 
 Use `--agent-command` when a lab needs a fully custom command.
 
+Worker failures record stable `failure_class` values:
+
+- `agent_command_failed` when the agent command exits nonzero;
+- `agent_process_terminated` when Python reports a signal-terminated
+  subprocess, such as return code `-9`;
+- `worker_exception` when the worker manager itself raises while preparing or
+  running the task;
+- `lease_expired` when runtime supervision reaps an expired active lease.
+
 ## Account Gates
 
 The account gate is intended to be the always-on cluster access layer. Separate
