@@ -376,6 +376,9 @@ def cmd_events(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(events, indent=2))
         return 0
+    if args.jsonl:
+        print_jsonl(events)
+        return 0
     if not events:
         print("No events found.")
         return 0
@@ -1079,7 +1082,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("--type", help="Filter by event message_type.")
     p.add_argument("--controller", help="Filter by event controller_id.")
-    p.add_argument("--json", action="store_true")
+    out = p.add_mutually_exclusive_group()
+    out.add_argument("--json", action="store_true")
+    out.add_argument("--jsonl", action="store_true")
     p.set_defaults(func=cmd_events)
 
     p = sub.add_parser("verify", help="Record neutral verification decisions for completed attempts.")
