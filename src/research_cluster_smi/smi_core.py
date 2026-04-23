@@ -1406,6 +1406,55 @@ class SMIRuntime:
             events.append(record)
         return events
 
+    def controller_event_summary(
+        self,
+        run_id: str,
+        *,
+        controller_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = [run_id]
+        controller_filter = ""
+        if controller_id:
+            controller_filter = " AND controller_id=?"
+            params.append(controller_id)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                COALESCE(controller_id, '<none>') AS controller_id,
+                message_type,
+                COUNT(*) AS count,
+                MIN(timestamp) AS first_seen,
+                MAX(timestamp) AS last_seen
+            FROM events
+            WHERE run_id=?
+              {controller_filter}
+            GROUP BY COALESCE(controller_id, '<none>'), message_type
+            ORDER BY controller_id, message_type
+            """,
+            params,
+        ).fetchall()
+        summaries: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            controller = row["controller_id"]
+            summary = summaries.setdefault(
+                controller,
+                {
+                    "controller_id": controller,
+                    "event_count": 0,
+                    "first_seen": row["first_seen"],
+                    "last_seen": row["last_seen"],
+                    "message_types": {},
+                },
+            )
+            count = int(row["count"])
+            summary["event_count"] += count
+            summary["message_types"][row["message_type"]] = count
+            if row["first_seen"] < summary["first_seen"]:
+                summary["first_seen"] = row["first_seen"]
+            if row["last_seen"] > summary["last_seen"]:
+                summary["last_seen"] = row["last_seen"]
+        return list(summaries.values())
+
 
 def run_dir_for(run_root: str | Path, run_id: str) -> Path:
     return Path(run_root).expanduser().resolve() / run_id

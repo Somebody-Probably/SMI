@@ -67,6 +67,17 @@ The controller id is recorded in SQLite event rows, in `events.jsonl`, and in
 only events emitted under one controller identity. Existing run databases are
 upgraded with the event column when opened by the runtime.
 
+Use `controllers` for a read-only summary of event activity by controller:
+
+```bash
+research-smi controllers --run-id <run-id>
+research-smi controllers --run-id <run-id> --controller verifier-loop --json
+research-smi controllers --run-id <run-id> --fail-on-event lease.expired
+```
+
+`--fail-on-event` preserves normal output and exits nonzero when the selected
+event type appears in the summary.
+
 ## Verification Records
 
 Task execution and task acceptance are separate. A worker can complete an

@@ -404,6 +404,35 @@ def cmd_events(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def cmd_controllers(args: argparse.Namespace) -> int:
+    runtime = runtime_from_args(args)
+    try:
+        summaries = runtime.controller_event_summary(args.run_id, controller_id=args.controller)
+    finally:
+        runtime.close()
+    fail_on_events = set(args.fail_on_event or [])
+    exit_code = 0
+    if fail_on_events:
+        for summary in summaries:
+            if fail_on_events.intersection(summary["message_types"]):
+                exit_code = 1
+                break
+    if args.json:
+        print(json.dumps(summaries, indent=2))
+        return exit_code
+    if not summaries:
+        print("No controller events found.")
+        return 0
+    for summary in summaries:
+        print(
+            f"CONTROLLER {summary['controller_id']} events={summary['event_count']} "
+            f"first={summary['first_seen']} last={summary['last_seen']}"
+        )
+        for message_type, count in summary["message_types"].items():
+            print(f"  {message_type}={count}")
+    return exit_code
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     runtime = runtime_from_args(args)
     try:
@@ -1088,6 +1117,13 @@ def build_parser() -> argparse.ArgumentParser:
     out.add_argument("--json", action="store_true")
     out.add_argument("--jsonl", action="store_true")
     p.set_defaults(func=cmd_events)
+
+    p = sub.add_parser("controllers", help="Summarize runtime events by controller.")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--controller", help="Filter by event controller_id.")
+    p.add_argument("--fail-on-event", action="append", help="Exit nonzero if this event message_type appears.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_controllers)
 
     p = sub.add_parser("verify", help="Record neutral verification decisions for completed attempts.")
     p.add_argument("--run-id", required=True)
