@@ -152,6 +152,26 @@ def utc_deadline(seconds: int) -> str:
     )
 
 
+def parse_utc_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def elapsed_seconds(now: datetime, then_value: str | None) -> int | None:
+    then = parse_utc_timestamp(then_value)
+    if then is None:
+        return None
+    return max(0, int((now - then).total_seconds()))
+
+
+def seconds_until(now: datetime, deadline_value: str | None) -> int | None:
+    deadline = parse_utc_timestamp(deadline_value)
+    if deadline is None:
+        return None
+    return int((deadline - now).total_seconds())
+
+
 def json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -1032,12 +1052,20 @@ class SMIRuntime:
             "SELECT decision, COUNT(*) AS count FROM verifications WHERE run_id=? GROUP BY decision",
             (run_id,),
         ).fetchall()
+        now = datetime.now(timezone.utc)
+        active_leases = []
+        for row in active_lease_rows:
+            lease = dict(row)
+            lease["age_seconds"] = elapsed_seconds(now, lease.get("issued_at"))
+            lease["heartbeat_age_seconds"] = elapsed_seconds(now, lease.get("last_heartbeat_at"))
+            lease["expires_in_seconds"] = seconds_until(now, lease.get("expires_at"))
+            active_leases.append(lease)
         return {
             "run_id": run_id,
             "status": run["status"],
             "tasks": {row["status"]: row["count"] for row in task_rows},
             "leases": {row["status"]: row["count"] for row in lease_rows},
-            "active_leases": [dict(row) for row in active_lease_rows],
+            "active_leases": active_leases,
             "verification_pending": self.pending_verification_count(run_id),
             "verification_current": self.current_verification_counts(run_id),
             "verifications": {row["decision"]: row["count"] for row in verification_rows},
