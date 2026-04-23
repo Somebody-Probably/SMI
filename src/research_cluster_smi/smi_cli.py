@@ -29,6 +29,11 @@ def load_json(path: str | Path) -> Any:
         return json.load(handle)
 
 
+def print_jsonl(records: list[dict[str, Any]]) -> None:
+    for record in records:
+        print(json.dumps(record, sort_keys=True))
+
+
 def materialize_prompt(run_dir: Path, task: dict[str, Any]) -> str | None:
     prompt_path = task.get("prompt_path")
     if task.get("prompt") and not prompt_path:
@@ -273,6 +278,9 @@ def cmd_attempts(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(payload, indent=2))
         return 0
+    if args.jsonl:
+        print_jsonl(attempts)
+        return 0
     if not attempts:
         print("No attempts found.")
         return 0
@@ -305,6 +313,9 @@ def cmd_tasks(args: argparse.Namespace) -> int:
     }
     if args.json:
         print(json.dumps(payload, indent=2))
+        return 0
+    if args.jsonl:
+        print_jsonl(tasks)
         return 0
     if not tasks:
         print("No tasks found.")
@@ -1022,7 +1033,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--status", choices=("pending", "running", "completed", "failed"), help="Filter by attempt status.")
     p.add_argument("--failure-class", help="Filter by failure class.")
     p.add_argument("--limit", type=int, default=20)
-    p.add_argument("--json", action="store_true")
+    out = p.add_mutually_exclusive_group()
+    out.add_argument("--json", action="store_true")
+    out.add_argument("--jsonl", action="store_true")
     p.set_defaults(func=cmd_attempts)
 
     p = sub.add_parser("tasks", help="Show task records.")
@@ -1035,7 +1048,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filter by task status.",
     )
     p.add_argument("--limit", type=int, default=20)
-    p.add_argument("--json", action="store_true")
+    out = p.add_mutually_exclusive_group()
+    out.add_argument("--json", action="store_true")
+    out.add_argument("--jsonl", action="store_true")
     p.set_defaults(func=cmd_tasks)
 
     p = sub.add_parser("seed", help="Seed tasks from a JSON spec.")
