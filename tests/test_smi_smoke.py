@@ -625,6 +625,67 @@ def test_smi_events_filter_by_controller_identity(tmp_path: Path, capsys) -> Non
     assert "No events found." in capsys.readouterr().out
 
 
+def test_smi_controllers_summarizes_event_activity(tmp_path: Path, capsys) -> None:
+    run_id = "controller-summary"
+    runtime = runtime_for(tmp_path, run_id, controller_id="controller-alpha")
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+    finally:
+        runtime.close()
+
+    runtime = runtime_for(tmp_path, run_id, controller_id="controller-beta")
+    try:
+        runtime.seed_task(run_id, "fast_local", task_id="beta-task")
+        summaries = runtime.controller_event_summary(run_id, controller_id="controller-beta")
+        assert len(summaries) == 1
+        assert summaries[0]["event_count"] == 1
+        assert summaries[0]["message_types"] == {"task.seeded": 1}
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "controllers", "--run-id", run_id, "--json"])
+    assert rc == 0
+    summaries = json.loads(capsys.readouterr().out)
+    by_controller = {summary["controller_id"]: summary for summary in summaries}
+    assert by_controller["controller-alpha"]["message_types"] == {"run.initialized": 1}
+    assert by_controller["controller-beta"]["message_types"] == {"task.seeded": 1}
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "controllers",
+            "--run-id",
+            run_id,
+            "--controller",
+            "controller-beta",
+            "--fail-on-event",
+            "task.seeded",
+        ]
+    )
+    assert rc == 1
+    output = capsys.readouterr().out
+    assert "CONTROLLER controller-beta" in output
+    assert "task.seeded=1" in output
+    assert "controller-alpha" not in output
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "controllers",
+            "--run-id",
+            run_id,
+            "--controller",
+            "controller-beta",
+            "--fail-on-event",
+            "lease.expired",
+        ]
+    )
+    assert rc == 0
+    assert "task.seeded=1" in capsys.readouterr().out
+
+
 def test_smi_runtime_adds_controller_column_to_legacy_events_table(tmp_path: Path) -> None:
     run_id = "legacy-controller-column"
     run_dir = tmp_path / run_id
