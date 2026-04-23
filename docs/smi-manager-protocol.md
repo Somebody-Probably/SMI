@@ -48,6 +48,18 @@ research-smi events --run-id <run-id> --type lease.expired --json
 
 The event log is also mirrored as JSONL at `runs/<run-id>/events.jsonl`.
 
+Use `--controller-id` or `SMI_CONTROLLER_ID` to stamp emitted runtime events
+with the controller responsible for the action:
+
+```bash
+research-smi --controller-id root-supervisor init --run-id <run-id>
+research-smi --controller-id verifier-loop verify --run-id <run-id>
+```
+
+The controller id is recorded in SQLite event rows, in `events.jsonl`, and in
+`research-smi events` text and JSON output. Existing run databases are upgraded
+with the event column when opened by the runtime.
+
 ## Verification Records
 
 Task execution and task acceptance are separate. A worker can complete an

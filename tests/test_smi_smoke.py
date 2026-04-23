@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import subprocess
 import sys
 import time
@@ -8,7 +9,7 @@ from research_cluster_smi import smi_cli
 from research_cluster_smi import worker as worker_module
 from research_cluster_smi.account_gate import AccountGate, account_gate_path
 from research_cluster_smi.orders import OrderWatcher
-from research_cluster_smi.smi_core import runtime_for
+from research_cluster_smi.smi_core import SMIRuntime, runtime_for
 from research_cluster_smi.worker import WorkerManager
 
 
@@ -489,6 +490,79 @@ def test_smi_events_cli_renders_recent_events(tmp_path: Path, capsys) -> None:
     output = capsys.readouterr().out
     assert "run.initialized" in output
     assert "task.seeded" in output
+
+
+def test_smi_events_include_controller_identity_from_cli(tmp_path: Path, capsys) -> None:
+    run_id = "events-controller-cli"
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "--controller-id",
+            "controller-alpha",
+            "init",
+            "--run-id",
+            run_id,
+        ]
+    )
+    assert rc == 0
+    capsys.readouterr()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "events", "--run-id", run_id, "--type", "run.initialized", "--json"])
+    assert rc == 0
+    events = json.loads(capsys.readouterr().out)
+    assert events[-1]["controller_id"] == "controller-alpha"
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "events", "--run-id", run_id, "--type", "run.initialized"])
+    assert rc == 0
+    assert "controller=controller-alpha" in capsys.readouterr().out
+
+    event_file = tmp_path / run_id / "events.jsonl"
+    first_event = json.loads(event_file.read_text(encoding="utf-8").splitlines()[0])
+    assert first_event["controller_id"] == "controller-alpha"
+
+
+def test_smi_runtime_adds_controller_column_to_legacy_events_table(tmp_path: Path) -> None:
+    run_id = "legacy-controller-column"
+    run_dir = tmp_path / run_id
+    run_dir.mkdir(parents=True)
+    db_path = run_dir / "run.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE events (
+                sequence_no INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id TEXT NOT NULL UNIQUE,
+                run_id TEXT NOT NULL,
+                message_type TEXT NOT NULL,
+                lane TEXT,
+                task_id TEXT,
+                attempt_id TEXT,
+                lease_id TEXT,
+                slot_id TEXT,
+                timestamp TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    runtime = SMIRuntime(db_path, run_dir, controller_id="legacy-controller")
+    try:
+        columns = {
+            row["name"]
+            for row in runtime.conn.execute("PRAGMA table_info(events)").fetchall()
+        }
+        assert "controller_id" in columns
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        event = runtime.recent_events(run_id, message_type="run.initialized")[-1]
+        assert event["controller_id"] == "legacy-controller"
+    finally:
+        runtime.close()
 
 
 def test_smi_verify_accepts_completed_dry_run(tmp_path: Path, capsys) -> None:

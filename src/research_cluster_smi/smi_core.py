@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS events (
     attempt_id TEXT,
     lease_id TEXT,
     slot_id TEXT,
+    controller_id TEXT,
     timestamp TEXT NOT NULL,
     payload_json TEXT NOT NULL DEFAULT '{}'
 );
@@ -201,17 +202,33 @@ class Assignment:
 class SMIRuntime:
     """SQLite-backed SMI runtime."""
 
-    def __init__(self, db_path: str | Path, run_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        run_dir: str | Path | None = None,
+        *,
+        controller_id: str | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
         self.run_dir = Path(run_dir) if run_dir else self.db_path.parent
+        self.controller_id = controller_id or os.environ.get("SMI_CONTROLLER_ID")
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._ensure_schema_compatibility()
         self.conn.commit()
 
     def close(self) -> None:
         self.conn.close()
+
+    def _ensure_schema_compatibility(self) -> None:
+        event_columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(events)").fetchall()
+        }
+        if "controller_id" not in event_columns:
+            self.conn.execute("ALTER TABLE events ADD COLUMN controller_id TEXT")
 
     def initialize_run(
         self,
@@ -254,8 +271,10 @@ class SMIRuntime:
         attempt_id: str | None = None,
         lease_id: str | None = None,
         slot_id: str | None = None,
+        controller_id: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> None:
+        event_controller_id = controller_id if controller_id is not None else self.controller_id
         row = (
             str(uuid.uuid4()),
             run_id,
@@ -265,6 +284,7 @@ class SMIRuntime:
             attempt_id,
             lease_id,
             slot_id,
+            event_controller_id,
             utc_now(),
             json_dumps(payload or {}),
         )
@@ -273,8 +293,8 @@ class SMIRuntime:
                 """
                 INSERT INTO events(
                     message_id, run_id, message_type, lane, task_id, attempt_id,
-                    lease_id, slot_id, timestamp, payload_json
-                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                    lease_id, slot_id, controller_id, timestamp, payload_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 row,
             )
@@ -288,7 +308,8 @@ class SMIRuntime:
             "attempt_id": attempt_id,
             "lease_id": lease_id,
             "slot_id": slot_id,
-            "timestamp": row[8],
+            "controller_id": event_controller_id,
+            "timestamp": row[9],
             "payload": payload or {},
         }
         with event_file.open("a", encoding="utf-8") as handle:
@@ -1360,6 +1381,7 @@ class SMIRuntime:
                 attempt_id,
                 lease_id,
                 slot_id,
+                controller_id,
                 timestamp,
                 payload_json
             FROM events
@@ -1382,6 +1404,6 @@ def run_dir_for(run_root: str | Path, run_id: str) -> Path:
     return Path(run_root).expanduser().resolve() / run_id
 
 
-def runtime_for(run_root: str | Path, run_id: str) -> SMIRuntime:
+def runtime_for(run_root: str | Path, run_id: str, *, controller_id: str | None = None) -> SMIRuntime:
     rd = run_dir_for(run_root, run_id)
-    return SMIRuntime(rd / "run.db", rd)
+    return SMIRuntime(rd / "run.db", rd, controller_id=controller_id)
