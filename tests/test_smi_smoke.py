@@ -523,6 +523,57 @@ def test_smi_events_include_controller_identity_from_cli(tmp_path: Path, capsys)
     assert first_event["controller_id"] == "controller-alpha"
 
 
+def test_smi_events_filter_by_controller_identity(tmp_path: Path, capsys) -> None:
+    run_id = "events-controller-filter"
+    runtime = runtime_for(tmp_path, run_id, controller_id="controller-alpha")
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+    finally:
+        runtime.close()
+
+    runtime = runtime_for(tmp_path, run_id, controller_id="controller-beta")
+    try:
+        runtime.seed_task(run_id, "fast_local", task_id="beta-task")
+        alpha_events = runtime.recent_events(run_id, controller_id="controller-alpha")
+        assert [event["message_type"] for event in alpha_events] == ["run.initialized"]
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "events",
+            "--run-id",
+            run_id,
+            "--controller",
+            "controller-beta",
+            "--json",
+        ]
+    )
+    assert rc == 0
+    events = json.loads(capsys.readouterr().out)
+    assert [event["message_type"] for event in events] == ["task.seeded"]
+    assert events[0]["controller_id"] == "controller-beta"
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "events",
+            "--run-id",
+            run_id,
+            "--controller",
+            "controller-beta",
+        ]
+    )
+    assert rc == 0
+    output = capsys.readouterr().out
+    assert "task.seeded" in output
+    assert "controller=controller-beta" in output
+    assert "run.initialized" not in output
+
+
 def test_smi_runtime_adds_controller_column_to_legacy_events_table(tmp_path: Path) -> None:
     run_id = "legacy-controller-column"
     run_dir = tmp_path / run_id
