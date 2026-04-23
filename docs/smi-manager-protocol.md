@@ -82,6 +82,16 @@ The command can use literal placeholders `{artifact_root}`, `{run_dir}`,
 A nonzero validation command rejects the attempt and makes the CLI exit nonzero,
 including with `--json`.
 
+Use `verifications` to inspect the verification ledger directly:
+
+```bash
+research-smi verifications --run-id <run-id> --limit 20
+research-smi verifications --run-id <run-id> --decision rejected --json
+```
+
+Ledger records include the verification ID, task ID, attempt ID, decision,
+verifier, timestamp, diagnostics, and evidence packet.
+
 This initial verifier records decisions without changing dependency behavior.
 Downstream reconciliation can later decide how accepted, rejected, and held
 records should affect merges, retries, and public reports.

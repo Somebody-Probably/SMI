@@ -237,6 +237,34 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 1 if any(outcome.decision == "rejected" for outcome in outcomes) else 0
 
 
+def cmd_verifications(args: argparse.Namespace) -> int:
+    runtime = runtime_for(args.run_root, args.run_id)
+    try:
+        records = runtime.verification_records(
+            args.run_id,
+            task_id=args.task_id,
+            decision=args.decision,
+            limit=args.limit,
+        )
+    finally:
+        runtime.close()
+    if args.json:
+        print(json.dumps(records, indent=2))
+        return 0
+    if not records:
+        print("No verification records found.")
+        return 0
+    for record in records:
+        diagnostics = record.get("diagnostics") or ""
+        suffix = f": {diagnostics}" if diagnostics else ""
+        print(
+            f"{record['verified_at']} {record['decision'].upper()} {record['task_id']} "
+            f"attempt={record['attempt_id']} verification={record['verification_id']} "
+            f"verifier={record['verifier']}{suffix}"
+        )
+    return 0
+
+
 def cmd_worker(args: argparse.Namespace) -> int:
     runtime = runtime_for(args.run_root, args.run_id)
     account_gate = make_account_gate(args)
@@ -772,6 +800,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--include-verified", action="store_true", help="Create another verification for already verified attempts.")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("verifications", help="Show verification records.")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--task-id", help="Filter by task.")
+    p.add_argument("--decision", choices=("accepted", "rejected", "held"), help="Filter by decision.")
+    p.add_argument("--limit", type=int, default=20)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_verifications)
 
     p = sub.add_parser("worker", help="Run one lane worker manager.")
     p.add_argument("--run-id", required=True)
