@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 from research_cluster_smi.account_gate import AccountGate, account_gate_path
+from research_cluster_smi.orders import OrderWatcher
 from research_cluster_smi.smi_core import runtime_for
 from research_cluster_smi.worker import WorkerManager
 
@@ -78,6 +79,42 @@ def test_smi_releases_blocked_dependencies(tmp_path: Path) -> None:
         assert worker.tick() == {"started": 1, "completed": 1}
         status = runtime.status_summary(run_id)
         assert status["tasks"]["completed"] == 2
+    finally:
+        runtime.close()
+
+
+def test_order_watcher_accepts_utf8_bom_seed_order(tmp_path: Path) -> None:
+    run_id = "orders-bom"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        orders_dir = runtime.run_dir / "orders"
+        orders_dir.mkdir(parents=True, exist_ok=True)
+        order = {
+            "order_type": "seed",
+            "payload": {
+                "tasks": [
+                    {
+                        "id": "hello-bom",
+                        "lane": "fast_local",
+                        "priority": 150,
+                        "write_set": ["notes/hello-bom.md"],
+                        "prompt": "Say hello from a BOM-authored order.",
+                    }
+                ]
+            },
+        }
+        (orders_dir / "seed-bom.json").write_text(
+            "\ufeff" + json.dumps(order),
+            encoding="utf-8",
+        )
+
+        results = OrderWatcher(runtime, run_id, orders_dir).poll()
+
+        assert len(results) == 1
+        assert results[0].success is True
+        assert runtime.status_summary(run_id)["tasks"]["ready"] == 1
+        assert (runtime.run_dir / "prompts" / "hello-bom.md").exists()
     finally:
         runtime.close()
 

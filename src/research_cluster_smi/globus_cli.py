@@ -32,7 +32,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
             f"Config not found: {config_path}. Copy config/globus.example.json "
             "to config/globus.json and fill in endpoint IDs."
         )
-    with config_path.open("r", encoding="utf-8") as handle:
+    with config_path.open("r", encoding="utf-8-sig") as handle:
         config = json.load(handle)
     if "endpoints" not in config or "transfers" not in config:
         raise GlobusConfigError("Config must contain 'endpoints' and 'transfers'.")
