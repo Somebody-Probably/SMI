@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,11 +37,48 @@ def artifact_path(root: Path, value: str) -> Path:
     return root / path
 
 
+def expand_validation_command(command: str, attempt: dict[str, Any], artifact_root: Path) -> str:
+    values = {
+        "artifact_root": str(artifact_root),
+        "run_dir": str(artifact_root),
+        "task_id": str(attempt["task_id"]),
+        "attempt_id": str(attempt["attempt_id"]),
+    }
+    expanded = command
+    for key, value in values.items():
+        expanded = expanded.replace(f"{{{key}}}", value)
+    return expanded
+
+
+def run_validation_command(command: str, attempt: dict[str, Any], artifact_root: Path) -> dict[str, Any]:
+    expanded = expand_validation_command(command, attempt, artifact_root)
+    env = os.environ.copy()
+    env["SMI_VERIFY_TASK_ID"] = str(attempt["task_id"])
+    env["SMI_VERIFY_ATTEMPT_ID"] = str(attempt["attempt_id"])
+    env["SMI_VERIFY_ARTIFACT_ROOT"] = str(artifact_root)
+    completed = subprocess.run(
+        expanded,
+        shell=True,
+        cwd=artifact_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return {
+        "command": expanded,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+    }
+
+
 def verify_attempt(
     attempt: dict[str, Any],
     *,
     artifact_root: Path,
     require_artifacts: bool = False,
+    validation_command: str | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     result = attempt.get("result") or {}
     evidence: dict[str, Any] = {
@@ -58,6 +97,12 @@ def verify_attempt(
         if missing:
             return "held", f"Missing {len(missing)} expected artifact(s).", evidence
 
+    if validation_command:
+        validation = run_validation_command(validation_command, attempt, artifact_root)
+        evidence["validation_command"] = validation
+        if validation["returncode"] != 0:
+            return "rejected", f"Validation command failed with exit code {validation['returncode']}.", evidence
+
     return "accepted", "Completed attempt passed neutral verification checks.", evidence
 
 
@@ -69,6 +114,7 @@ def verify_completed_attempts(
     verifier: str = "neutral",
     artifact_root: str | Path | None = None,
     require_artifacts: bool = False,
+    validation_command: str | None = None,
     include_verified: bool = False,
 ) -> list[VerificationOutcome]:
     root = Path(artifact_root) if artifact_root is not None else runtime.run_dir
@@ -79,6 +125,7 @@ def verify_completed_attempts(
             attempt,
             artifact_root=root,
             require_artifacts=require_artifacts,
+            validation_command=validation_command,
         )
         verification_id = runtime.record_verification(
             run_id,
@@ -100,4 +147,3 @@ def verify_completed_attempts(
             )
         )
     return outcomes
-

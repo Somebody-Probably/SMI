@@ -156,6 +156,79 @@ def test_smi_verify_holds_missing_artifacts_when_required(tmp_path: Path, capsys
         runtime.close()
 
 
+def test_smi_verify_runs_validation_command(tmp_path: Path, capsys) -> None:
+    run_id = "verify-command"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        prompt = runtime.run_dir / "prompts" / "command.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("validate me", encoding="utf-8")
+        runtime.seed_task(run_id, "fast_local", task_id="command", prompt_path=str(prompt))
+        worker = WorkerManager(runtime, run_id, "fast_local", slots=1, dry_run=True)
+        worker.register_slots()
+        assert worker.tick() == {"started": 1, "completed": 1}
+    finally:
+        runtime.close()
+
+    validation_command = (
+        f'"{sys.executable}" -c "import os, pathlib; '
+        "pathlib.Path('validation.txt').write_text('{task_id}:' + os.environ['SMI_VERIFY_TASK_ID'])\""
+    )
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "verify",
+            "--run-id",
+            run_id,
+            "--validation-command",
+            validation_command,
+            "--json",
+        ]
+    )
+
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload[0]["decision"] == "accepted"
+    assert payload[0]["evidence"]["validation_command"]["returncode"] == 0
+    assert "{task_id}" not in payload[0]["evidence"]["validation_command"]["command"]
+    assert (tmp_path / run_id / "validation.txt").read_text(encoding="utf-8") == "command:command"
+
+
+def test_smi_verify_rejects_failed_validation_command(tmp_path: Path, capsys) -> None:
+    run_id = "verify-command-fails"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        runtime.seed_task(run_id, "fast_local", task_id="bad-command")
+        worker = WorkerManager(runtime, run_id, "fast_local", slots=1, dry_run=True)
+        worker.register_slots()
+        assert worker.tick() == {"started": 1, "completed": 1}
+    finally:
+        runtime.close()
+
+    validation_command = f'"{sys.executable}" -c "import sys; sys.exit(7)"'
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "verify",
+            "--run-id",
+            run_id,
+            "--validation-command",
+            validation_command,
+            "--json",
+        ]
+    )
+
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload[0]["decision"] == "rejected"
+    assert payload[0]["diagnostics"] == "Validation command failed with exit code 7."
+    assert payload[0]["evidence"]["validation_command"]["returncode"] == 7
+
+
 def test_smi_releases_blocked_dependencies(tmp_path: Path) -> None:
     run_id = "deps"
     runtime = runtime_for(tmp_path, run_id)
