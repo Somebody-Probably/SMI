@@ -133,11 +133,17 @@ def cmd_status(args: argparse.Namespace) -> int:
                 f"  {lease['lease_id']} task={lease['task_id']} slot={lease['slot_id']} "
                 f"expires={lease['expires_at']}"
             )
-    if summary.get("verification_pending") or summary.get("verifications"):
+    if summary.get("verification_pending") or summary.get("verification_current") or summary.get("verifications"):
         print("Verifications:")
         print(f"  {'pending':<14} {summary.get('verification_pending', 0)}")
-        for decision, count in sorted(summary["verifications"].items()):
-            print(f"  {decision:<14} {count}")
+        if summary.get("verification_current"):
+            print("  current:")
+            for decision, count in sorted(summary["verification_current"].items()):
+                print(f"    {decision:<12} {count}")
+        if summary.get("verifications"):
+            print("  records:")
+            for decision, count in sorted(summary["verifications"].items()):
+                print(f"    {decision:<12} {count}")
     return 0
 
 
