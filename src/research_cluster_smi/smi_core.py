@@ -651,14 +651,16 @@ class SMIRuntime:
             )
         return expired
 
-    def complete_attempt(self, run_id: str, attempt_id: str, result: dict[str, Any] | None = None) -> None:
+    def complete_attempt(self, run_id: str, attempt_id: str, result: dict[str, Any] | None = None) -> bool:
         now = utc_now()
         row = self.conn.execute(
-            "SELECT task_id, slot_id, lease_id FROM attempts WHERE run_id=? AND attempt_id=?",
+            "SELECT task_id, slot_id, lease_id, status FROM attempts WHERE run_id=? AND attempt_id=?",
             (run_id, attempt_id),
         ).fetchone()
         if not row:
             raise KeyError(f"Unknown attempt: {attempt_id}")
+        if row["status"] not in {"pending", "running"}:
+            return False
         with self.conn:
             self.conn.execute(
                 "UPDATE attempts SET status='completed', completed_at=?, result_json=? WHERE run_id=? AND attempt_id=?",
@@ -688,6 +690,7 @@ class SMIRuntime:
         )
         for task_id in released:
             self.publish_event("task.unblocked", run_id, task_id=task_id)
+        return True
 
     def fail_attempt(
         self,
@@ -697,14 +700,16 @@ class SMIRuntime:
         failure_class: str,
         diagnostics: str = "",
         retryable: bool = True,
-    ) -> None:
+    ) -> bool:
         now = utc_now()
         row = self.conn.execute(
-            "SELECT task_id, slot_id, lease_id FROM attempts WHERE run_id=? AND attempt_id=?",
+            "SELECT task_id, slot_id, lease_id, status FROM attempts WHERE run_id=? AND attempt_id=?",
             (run_id, attempt_id),
         ).fetchone()
         if not row:
             raise KeyError(f"Unknown attempt: {attempt_id}")
+        if row["status"] not in {"pending", "running"}:
+            return False
         next_status = "retry_ready" if retryable else "rejected"
         with self.conn:
             self.conn.execute(
@@ -736,6 +741,84 @@ class SMIRuntime:
             slot_id=row["slot_id"],
             payload={"failure_class": failure_class, "retryable": retryable},
         )
+        return True
+
+    def cancel_attempt(
+        self,
+        run_id: str,
+        attempt_id: str,
+        *,
+        diagnostics: str = "Canceled by operator.",
+        retryable: bool = True,
+    ) -> dict[str, Any] | None:
+        now = utc_now()
+        row = self.conn.execute(
+            """
+            SELECT
+                attempts.task_id,
+                attempts.slot_id,
+                attempts.lease_id,
+                attempts.status AS attempt_status,
+                tasks.lane,
+                tasks.status AS task_status,
+                leases.status AS lease_status
+            FROM attempts
+            JOIN tasks ON tasks.run_id=attempts.run_id AND tasks.task_id=attempts.task_id
+            LEFT JOIN leases ON leases.run_id=attempts.run_id AND leases.lease_id=attempts.lease_id
+            WHERE attempts.run_id=? AND attempts.attempt_id=?
+            """,
+            (run_id, attempt_id),
+        ).fetchone()
+        if not row:
+            raise KeyError(f"Unknown attempt: {attempt_id}")
+        if row["attempt_status"] not in {"pending", "running"}:
+            return None
+        next_status = "retry_ready" if retryable else "rejected"
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE attempts
+                SET status='failed', completed_at=?, failure_class=?, diagnostics=?
+                WHERE run_id=? AND attempt_id=? AND status IN ('pending', 'running')
+                """,
+                (now, "attempt_canceled", diagnostics, run_id, attempt_id),
+            )
+            self.conn.execute(
+                "UPDATE tasks SET status=?, updated_at=? WHERE run_id=? AND task_id=?",
+                (next_status, now, run_id, row["task_id"]),
+            )
+            if row["lease_id"]:
+                self.conn.execute(
+                    "UPDATE leases SET status='released' WHERE run_id=? AND lease_id=?",
+                    (run_id, row["lease_id"]),
+                )
+            if row["slot_id"]:
+                self.conn.execute(
+                    "UPDATE slots SET status='idle', current_lease_id=NULL, last_heartbeat_at=? WHERE run_id=? AND slot_id=?",
+                    (now, run_id, row["slot_id"]),
+                )
+        record = dict(row)
+        record.update(
+            {
+                "attempt_id": attempt_id,
+                "failure_class": "attempt_canceled",
+                "diagnostics": diagnostics,
+                "retryable": retryable,
+                "next_task_status": next_status,
+                "canceled_at": now,
+            }
+        )
+        self.publish_event(
+            "attempt.canceled",
+            run_id,
+            lane=row["lane"],
+            task_id=row["task_id"],
+            attempt_id=attempt_id,
+            lease_id=row["lease_id"],
+            slot_id=row["slot_id"],
+            payload={"retryable": retryable, "diagnostics": diagnostics},
+        )
+        return record
 
     def latest_completed_attempts(
         self,

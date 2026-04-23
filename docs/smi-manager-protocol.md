@@ -240,6 +240,20 @@ work. Expired leases are marked `expired`, their attempts are failed with
 `failure_class=lease_expired`, their tasks return to `retry_ready`, their slots
 return to `idle`, and `lease.expired` events are recorded.
 
+Use `cancel-attempt` when an operator or controller needs to stop trusting one
+pending or running attempt before its lease expires:
+
+```bash
+research-smi cancel-attempt --run-id <run-id> --attempt-id <attempt-id>
+research-smi cancel-attempt --run-id <run-id> --attempt-id <attempt-id> --diagnostics "operator stop" --json
+```
+
+Canceled attempts are failed with `failure_class=attempt_canceled`, their leases
+are released, their slots return to `idle`, and SMI writes an
+`attempt.canceled` event. By default the task returns to `retry_ready`; use
+`--no-retry` when the cancellation should reject the task instead. Late worker
+completion or failure reports for an already terminal attempt are ignored.
+
 ## Agent Workers
 
 Workers can run a CLI agent for each claimed task. The backward-compatible
@@ -261,6 +275,8 @@ Worker failures record stable `failure_class` values:
 - `agent_command_failed` when the agent command exits nonzero;
 - `agent_process_terminated` when Python reports a signal-terminated
   subprocess, such as return code `-9`;
+- `attempt_canceled` when a controller explicitly cancels a pending or running
+  attempt;
 - `worker_exception` when the worker manager itself raises while preparing or
   running the task;
 - `lease_expired` when runtime supervision reaps an expired active lease.
