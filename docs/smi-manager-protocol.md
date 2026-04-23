@@ -217,6 +217,16 @@ state so another attempt can be scheduled.
 status view also shows these fields so an operator can spot old heartbeats or
 near-expiring leases without opening SQLite.
 
+Use `leases` for a filtered active-lease view:
+
+```bash
+research-smi leases --run-id <run-id> --stale-heartbeat-seconds 120
+research-smi leases --run-id <run-id> --expiring-within-seconds 30 --fail-on-match --json
+```
+
+The command is read-only. `--fail-on-match` makes automation exit nonzero when
+any active lease matches the selected stale-heartbeat or expiry filters.
+
 ## Agent Workers
 
 Workers can run a CLI agent for each claimed task. The backward-compatible

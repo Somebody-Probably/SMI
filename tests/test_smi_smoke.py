@@ -68,6 +68,70 @@ def test_status_summary_includes_leases_and_recent_events(tmp_path: Path) -> Non
         runtime.close()
 
 
+def test_smi_leases_filters_and_gates_active_leases(tmp_path: Path, capsys) -> None:
+    run_id = "lease-inspect"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        runtime.register_slot(run_id, "fast_local", "fast_local-00")
+        runtime.seed_task(run_id, "fast_local", task_id="lease-task")
+        assignment = runtime.claim_next_task(run_id, "fast_local-00")
+        assert assignment is not None
+
+        with runtime.conn:
+            runtime.conn.execute(
+                "UPDATE slots SET last_heartbeat_at=? WHERE run_id=? AND slot_id=?",
+                ("2000-01-01T00:00:00.000Z", run_id, "fast_local-00"),
+            )
+            runtime.conn.execute(
+                "UPDATE leases SET expires_at=? WHERE run_id=? AND lease_id=?",
+                ("2000-01-01T00:00:00.000Z", run_id, assignment.lease_id),
+            )
+    finally:
+        runtime.close()
+
+    rc = smi_cli.main(["--run-root", str(tmp_path), "leases", "--run-id", run_id, "--json"])
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 1
+    assert payload["active_leases"][0]["task_id"] == "lease-task"
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "leases",
+            "--run-id",
+            run_id,
+            "--stale-heartbeat-seconds",
+            "60",
+            "--expiring-within-seconds",
+            "60",
+            "--fail-on-match",
+            "--json",
+        ]
+    )
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 1
+    assert payload["active_leases"][0]["expires_in_seconds"] <= 60
+
+    rc = smi_cli.main(
+        [
+            "--run-root",
+            str(tmp_path),
+            "leases",
+            "--run-id",
+            run_id,
+            "--stale-heartbeat-seconds",
+            "999999999",
+            "--fail-on-match",
+        ]
+    )
+    assert rc == 0
+    assert "No active leases matched." in capsys.readouterr().out
+
+
 def test_smi_events_cli_renders_recent_events(tmp_path: Path, capsys) -> None:
     run_id = "events-cli"
     runtime = runtime_for(tmp_path, run_id)
