@@ -822,6 +822,30 @@ class SMIRuntime:
         )
         return verification_id
 
+    def pending_verification_count(self, run_id: str) -> int:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM tasks
+            JOIN attempts ON attempts.run_id=tasks.run_id AND attempts.task_id=tasks.task_id
+            WHERE tasks.run_id=? AND tasks.status='completed' AND attempts.status='completed'
+              AND NOT EXISTS (
+                SELECT 1 FROM verifications
+                WHERE verifications.run_id=attempts.run_id
+                  AND verifications.attempt_id=attempts.attempt_id
+              )
+              AND attempts.completed_at = (
+                SELECT MAX(inner_attempts.completed_at)
+                FROM attempts AS inner_attempts
+                WHERE inner_attempts.run_id=attempts.run_id
+                  AND inner_attempts.task_id=attempts.task_id
+                  AND inner_attempts.status='completed'
+              )
+            """,
+            (run_id,),
+        ).fetchone()
+        return int(row["count"])
+
     def status_summary(self, run_id: str) -> dict[str, Any]:
         run = self.conn.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
         if not run:
@@ -872,6 +896,7 @@ class SMIRuntime:
             "tasks": {row["status"]: row["count"] for row in task_rows},
             "leases": {row["status"]: row["count"] for row in lease_rows},
             "active_leases": [dict(row) for row in active_lease_rows],
+            "verification_pending": self.pending_verification_count(run_id),
             "verifications": {row["decision"]: row["count"] for row in verification_rows},
             "slots": [
                 {"lane": row["lane"], "status": row["status"], "count": row["count"]}
