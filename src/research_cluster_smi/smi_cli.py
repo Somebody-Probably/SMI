@@ -148,6 +148,53 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def filtered_active_leases(summary: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
+    leases = list(summary.get("active_leases") or [])
+    if args.stale_heartbeat_seconds is not None:
+        leases = [
+            lease
+            for lease in leases
+            if lease.get("heartbeat_age_seconds") is not None
+            and lease["heartbeat_age_seconds"] >= args.stale_heartbeat_seconds
+        ]
+    if args.expiring_within_seconds is not None:
+        leases = [
+            lease
+            for lease in leases
+            if lease.get("expires_in_seconds") is not None
+            and lease["expires_in_seconds"] <= args.expiring_within_seconds
+        ]
+    return leases
+
+
+def cmd_leases(args: argparse.Namespace) -> int:
+    runtime = runtime_for(args.run_root, args.run_id)
+    try:
+        summary = runtime.status_summary(args.run_id)
+    finally:
+        runtime.close()
+    leases = filtered_active_leases(summary, args)
+    payload = {
+        "run_id": args.run_id,
+        "count": len(leases),
+        "active_leases": leases,
+    }
+    exit_code = 1 if args.fail_on_match and leases else 0
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return exit_code
+    if not leases:
+        print("No active leases matched.")
+        return exit_code
+    for lease in leases:
+        print(
+            f"{lease['lease_id']} task={lease['task_id']} lane={lease['lane']} slot={lease['slot_id']} "
+            f"age={lease['age_seconds']}s heartbeat_age={lease['heartbeat_age_seconds']}s "
+            f"expires_in={lease['expires_in_seconds']}s"
+        )
+    return exit_code
+
+
 def cmd_seed(args: argparse.Namespace) -> int:
     runtime = runtime_for(args.run_root, args.run_id)
     try:
@@ -817,6 +864,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-id", required=True)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("leases", help="Inspect active leases.")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--stale-heartbeat-seconds", type=int, help="Show active leases whose heartbeat age is at least this many seconds.")
+    p.add_argument("--expiring-within-seconds", type=int, help="Show active leases expiring within this many seconds.")
+    p.add_argument("--fail-on-match", action="store_true", help="Exit nonzero if any active lease matches the filters.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_leases)
 
     p = sub.add_parser("seed", help="Seed tasks from a JSON spec.")
     p.add_argument("--run-id", required=True)
