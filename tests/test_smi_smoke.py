@@ -235,3 +235,115 @@ def test_smi_parallel_worker_supervises_multiple_agents(tmp_path: Path) -> None:
         assert status["tasks"]["completed"] == 2
     finally:
         runtime.close()
+
+
+def test_parallel_worker_heartbeats_active_lease(tmp_path: Path) -> None:
+    run_id = "heartbeat-agent-command"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        prompt = runtime.run_dir / "prompts" / "heartbeat.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("stay alive", encoding="utf-8")
+        agent = tmp_path / "slow_agent.py"
+        agent.write_text(
+            "import sys, time\n"
+            "prompt = sys.stdin.read()\n"
+            "time.sleep(1.0)\n"
+            "print('done:' + prompt)\n",
+            encoding="utf-8",
+        )
+        runtime.seed_task(run_id, "fast_local", task_id="heartbeat", prompt_path=str(prompt))
+
+        worker = WorkerManager(
+            runtime,
+            run_id,
+            "fast_local",
+            slots=1,
+            agent_command=f"{sys.executable} {agent}",
+            parallel=True,
+        )
+        worker.register_slots()
+        assert worker.tick() == {"started": 1, "completed": 0}
+        lease_before = runtime.conn.execute(
+            "SELECT expires_at FROM leases WHERE run_id=? AND task_id=?",
+            (run_id, "heartbeat"),
+        ).fetchone()["expires_at"]
+
+        time.sleep(0.1)
+        assert worker.tick(start_new=False) == {"started": 0, "completed": 0}
+        lease_after = runtime.conn.execute(
+            "SELECT expires_at FROM leases WHERE run_id=? AND task_id=?",
+            (run_id, "heartbeat"),
+        ).fetchone()["expires_at"]
+        assert lease_after > lease_before
+        heartbeat_events = runtime.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE run_id=? AND message_type='lease.heartbeat'",
+            (run_id,),
+        ).fetchone()[0]
+        assert heartbeat_events >= 1
+
+        deadline = time.monotonic() + 5
+        completed = 0
+        while time.monotonic() < deadline and completed < 1:
+            time.sleep(0.05)
+            completed += worker.tick(start_new=False)["completed"]
+        assert completed == 1
+        assert runtime.status_summary(run_id)["tasks"]["completed"] == 1
+    finally:
+        runtime.close()
+
+
+def test_expired_lease_requeues_task_and_frees_slot(tmp_path: Path) -> None:
+    run_id = "expired-lease"
+    runtime = runtime_for(tmp_path, run_id)
+    try:
+        runtime.initialize_run(run_id, lanes={"fast_local": {"max_slots": 1}})
+        runtime.register_slot(run_id, "fast_local", "fast_local-00", heartbeat_timeout_sec=1)
+        prompt = runtime.run_dir / "prompts" / "expired.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("expire me", encoding="utf-8")
+        runtime.seed_task(run_id, "fast_local", task_id="expired", prompt_path=str(prompt))
+        assignment = runtime.claim_next_task(run_id, "fast_local-00")
+        assert assignment is not None
+        runtime.start_attempt(run_id, assignment.attempt_id)
+        with runtime.conn:
+            runtime.conn.execute(
+                "UPDATE leases SET expires_at=? WHERE run_id=? AND lease_id=?",
+                ("2000-01-01T00:00:00.000Z", run_id, assignment.lease_id),
+            )
+
+        expired = runtime.expire_stale_leases(run_id)
+
+        assert [row["task_id"] for row in expired] == ["expired"]
+        task = runtime.conn.execute(
+            "SELECT status FROM tasks WHERE run_id=? AND task_id=?",
+            (run_id, "expired"),
+        ).fetchone()
+        attempt = runtime.conn.execute(
+            "SELECT status, failure_class FROM attempts WHERE run_id=? AND attempt_id=?",
+            (run_id, assignment.attempt_id),
+        ).fetchone()
+        slot = runtime.conn.execute(
+            "SELECT status, current_lease_id FROM slots WHERE run_id=? AND slot_id=?",
+            (run_id, "fast_local-00"),
+        ).fetchone()
+        lease = runtime.conn.execute(
+            "SELECT status FROM leases WHERE run_id=? AND lease_id=?",
+            (run_id, assignment.lease_id),
+        ).fetchone()
+        assert task["status"] == "retry_ready"
+        assert dict(attempt) == {"status": "failed", "failure_class": "lease_expired"}
+        assert dict(slot) == {"status": "idle", "current_lease_id": None}
+        assert lease["status"] == "expired"
+        assert runtime.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE run_id=? AND message_type='lease.expired'",
+            (run_id,),
+        ).fetchone()[0] == 1
+
+        retry_assignment = runtime.claim_next_task(run_id, "fast_local-00")
+        assert retry_assignment is not None
+        assert retry_assignment.task_id == "expired"
+        assert retry_assignment.attempt_id != assignment.attempt_id
+    finally:
+        runtime.close()

@@ -130,6 +130,12 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def utc_deadline(seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z"
+    )
+
+
 def json_dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -422,9 +428,7 @@ class SMIRuntime:
             attempt_id = f"attempt-{uuid.uuid4().hex[:12]}"
             lease_id = f"lease-{uuid.uuid4().hex[:12]}"
             now = utc_now()
-            expires = (
-                datetime.now(timezone.utc) + timedelta(seconds=int(slot["heartbeat_timeout_sec"]))
-            ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            expires = utc_deadline(int(slot["heartbeat_timeout_sec"]))
             self.conn.execute(
                 "UPDATE tasks SET status='leased', updated_at=? WHERE run_id=? AND task_id=?",
                 (now, run_id, task["task_id"]),
@@ -497,6 +501,119 @@ class SMIRuntime:
             lease_id=row["lease_id"],
             slot_id=row["slot_id"],
         )
+
+    def heartbeat_attempt(self, run_id: str, attempt_id: str, *, payload: dict[str, Any] | None = None) -> bool:
+        row = self.conn.execute(
+            """
+            SELECT
+                attempts.task_id,
+                attempts.slot_id,
+                attempts.lease_id,
+                attempts.status AS attempt_status,
+                slots.heartbeat_timeout_sec,
+                leases.status AS lease_status
+            FROM attempts
+            JOIN slots ON slots.run_id=attempts.run_id AND slots.slot_id=attempts.slot_id
+            JOIN leases ON leases.run_id=attempts.run_id AND leases.lease_id=attempts.lease_id
+            WHERE attempts.run_id=? AND attempts.attempt_id=?
+            """,
+            (run_id, attempt_id),
+        ).fetchone()
+        if not row or row["attempt_status"] != "running" or row["lease_status"] != "active":
+            return False
+        now = utc_now()
+        expires = utc_deadline(int(row["heartbeat_timeout_sec"]))
+        with self.conn:
+            self.conn.execute(
+                "UPDATE slots SET last_heartbeat_at=? WHERE run_id=? AND slot_id=?",
+                (now, run_id, row["slot_id"]),
+            )
+            self.conn.execute(
+                "UPDATE leases SET expires_at=? WHERE run_id=? AND lease_id=? AND status='active'",
+                (expires, run_id, row["lease_id"]),
+            )
+        self.publish_event(
+            "lease.heartbeat",
+            run_id,
+            task_id=row["task_id"],
+            attempt_id=attempt_id,
+            lease_id=row["lease_id"],
+            slot_id=row["slot_id"],
+            payload={"expires_at": expires, **(payload or {})},
+        )
+        return True
+
+    def expire_stale_leases(self, run_id: str, *, lane: str | None = None) -> list[dict[str, Any]]:
+        now = utc_now()
+        params: list[Any] = [run_id, now]
+        lane_filter = ""
+        if lane is not None:
+            lane_filter = " AND tasks.lane=?"
+            params.append(lane)
+        rows = self.conn.execute(
+            f"""
+            SELECT
+                leases.lease_id,
+                leases.task_id,
+                leases.attempt_id,
+                leases.slot_id,
+                leases.expires_at,
+                tasks.lane,
+                tasks.status AS task_status,
+                attempts.status AS attempt_status
+            FROM leases
+            JOIN tasks ON tasks.run_id=leases.run_id AND tasks.task_id=leases.task_id
+            JOIN attempts ON attempts.run_id=leases.run_id AND attempts.attempt_id=leases.attempt_id
+            WHERE leases.run_id=? AND leases.status='active' AND leases.expires_at <= ?
+              AND tasks.status IN ('leased', 'running')
+              AND attempts.status IN ('pending', 'running')
+              {lane_filter}
+            ORDER BY leases.expires_at ASC
+            """,
+            params,
+        ).fetchall()
+        expired: list[dict[str, Any]] = []
+        with self.conn:
+            for row in rows:
+                self.conn.execute(
+                    "UPDATE leases SET status='expired' WHERE run_id=? AND lease_id=?",
+                    (run_id, row["lease_id"]),
+                )
+                self.conn.execute(
+                    """
+                    UPDATE attempts
+                    SET status='failed', completed_at=?, failure_class=?, diagnostics=?
+                    WHERE run_id=? AND attempt_id=?
+                    """,
+                    (
+                        now,
+                        "lease_expired",
+                        f"Lease expired at {row['expires_at']}",
+                        run_id,
+                        row["attempt_id"],
+                    ),
+                )
+                self.conn.execute(
+                    "UPDATE tasks SET status='retry_ready', updated_at=? WHERE run_id=? AND task_id=?",
+                    (now, run_id, row["task_id"]),
+                )
+                self.conn.execute(
+                    "UPDATE slots SET status='idle', current_lease_id=NULL, last_heartbeat_at=? WHERE run_id=? AND slot_id=?",
+                    (now, run_id, row["slot_id"]),
+                )
+                expired.append(dict(row))
+        for row in expired:
+            self.publish_event(
+                "lease.expired",
+                run_id,
+                lane=row["lane"],
+                task_id=row["task_id"],
+                attempt_id=row["attempt_id"],
+                lease_id=row["lease_id"],
+                slot_id=row["slot_id"],
+                payload={"expired_at": now, "previous_expires_at": row["expires_at"]},
+            )
+        return expired
 
     def complete_attempt(self, run_id: str, attempt_id: str, result: dict[str, Any] | None = None) -> None:
         now = utc_now()

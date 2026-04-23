@@ -97,6 +97,27 @@ stage inputs -> submit job -> monitor job -> harvest outputs -> parse/report
 Use lane capacities to throttle the expensive phases, such as staging and
 harvesting, while letting cheap monitoring tasks run separately.
 
+## Leases And Heartbeats
+
+When a worker claims a task, SMI creates an active lease tying the task,
+attempt, and slot together. The slot records `last_heartbeat_at`, and the lease
+records `expires_at`.
+
+Parallel workers renew active leases while subprocesses are still running. Each
+renewal writes a `lease.heartbeat` event with the refreshed expiry time. Before a
+worker claims more work in its lane, it reaps stale active leases whose
+`expires_at` has passed:
+
+- the stale lease becomes `expired`;
+- the attempt becomes `failed` with `failure_class=lease_expired`;
+- the task returns to `retry_ready`;
+- the slot returns to `idle`;
+- SMI writes a `lease.expired` event.
+
+This protects the queue when a worker process or controller exits without
+releasing its lease. It does not kill an external process; it reconciles SMI
+state so another attempt can be scheduled.
+
 ## Agent Workers
 
 Workers can run a CLI agent for each claimed task. The backward-compatible

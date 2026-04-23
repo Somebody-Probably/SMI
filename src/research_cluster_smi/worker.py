@@ -97,6 +97,7 @@ class WorkerManager:
         completed = self._poll_active()
         if not start_new:
             return {"started": started, "completed": completed}
+        self.runtime.expire_stale_leases(self.run_id, lane=self.lane)
         for slot_id in self.slot_ids:
             if slot_id in self.active:
                 continue
@@ -260,6 +261,11 @@ class WorkerManager:
         for slot_id, active in list(self.active.items()):
             returncode = active.process.poll()
             if returncode is None:
+                self.runtime.heartbeat_attempt(
+                    self.run_id,
+                    active.assignment["attempt_id"],
+                    payload={"pid": active.process.pid},
+                )
                 self._renew_account_permit(active.account_permit)
                 continue
             assignment = active.assignment
