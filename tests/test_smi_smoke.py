@@ -58,7 +58,11 @@ def test_status_summary_includes_leases_and_recent_events(tmp_path: Path) -> Non
         events = runtime.recent_events(run_id, limit=2)
 
         assert summary["leases"] == {"active": 1}
-        assert summary["active_leases"][0]["task_id"] == "inspect"
+        active_lease = summary["active_leases"][0]
+        assert active_lease["task_id"] == "inspect"
+        assert isinstance(active_lease["age_seconds"], int)
+        assert isinstance(active_lease["heartbeat_age_seconds"], int)
+        assert active_lease["expires_in_seconds"] > 0
         assert [event["message_type"] for event in events] == ["slot.registered", "task.claimed"]
     finally:
         runtime.close()

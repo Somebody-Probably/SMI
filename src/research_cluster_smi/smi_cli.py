@@ -131,7 +131,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         for lease in summary["active_leases"]:
             print(
                 f"  {lease['lease_id']} task={lease['task_id']} slot={lease['slot_id']} "
-                f"expires={lease['expires_at']}"
+                f"age={lease['age_seconds']}s heartbeat_age={lease['heartbeat_age_seconds']}s "
+                f"expires_in={lease['expires_in_seconds']}s expires={lease['expires_at']}"
             )
     if summary.get("verification_pending") or summary.get("verification_current") or summary.get("verifications"):
         print("Verifications:")

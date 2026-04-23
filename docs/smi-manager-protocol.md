@@ -212,6 +212,11 @@ This protects the queue when a worker process or controller exits without
 releasing its lease. It does not kill an external process; it reconciles SMI
 state so another attempt can be scheduled.
 
+`research-smi status --json` includes active lease timing fields:
+`age_seconds`, `heartbeat_age_seconds`, and `expires_in_seconds`. The text
+status view also shows these fields so an operator can spot old heartbeats or
+near-expiring leases without opening SQLite.
+
 ## Agent Workers
 
 Workers can run a CLI agent for each claimed task. The backward-compatible
