@@ -651,6 +651,29 @@ class SMIRuntime:
             )
         return expired
 
+    def _publish_terminal_update_ignored(
+        self,
+        run_id: str,
+        attempt_id: str,
+        row: sqlite3.Row,
+        *,
+        requested_status: str,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        self.publish_event(
+            "attempt.terminal_update_ignored",
+            run_id,
+            task_id=row["task_id"],
+            attempt_id=attempt_id,
+            lease_id=row["lease_id"],
+            slot_id=row["slot_id"],
+            payload={
+                "requested_status": requested_status,
+                "current_attempt_status": row["status"],
+                **(payload or {}),
+            },
+        )
+
     def complete_attempt(self, run_id: str, attempt_id: str, result: dict[str, Any] | None = None) -> bool:
         now = utc_now()
         row = self.conn.execute(
@@ -660,6 +683,18 @@ class SMIRuntime:
         if not row:
             raise KeyError(f"Unknown attempt: {attempt_id}")
         if row["status"] not in {"pending", "running"}:
+            result_payload = result or {}
+            self._publish_terminal_update_ignored(
+                run_id,
+                attempt_id,
+                row,
+                requested_status="completed",
+                payload={
+                    "reported_returncode": result_payload.get("returncode")
+                    if isinstance(result_payload, dict)
+                    else None,
+                },
+            )
             return False
         with self.conn:
             self.conn.execute(
@@ -709,6 +744,13 @@ class SMIRuntime:
         if not row:
             raise KeyError(f"Unknown attempt: {attempt_id}")
         if row["status"] not in {"pending", "running"}:
+            self._publish_terminal_update_ignored(
+                run_id,
+                attempt_id,
+                row,
+                requested_status="failed",
+                payload={"failure_class": failure_class, "retryable": retryable},
+            )
             return False
         next_status = "retry_ready" if retryable else "rejected"
         with self.conn:

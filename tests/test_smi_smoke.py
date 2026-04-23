@@ -275,6 +275,25 @@ def test_smi_cancel_attempt_cli_marks_attempt_canceled(tmp_path: Path, capsys) -
             (run_id, assignment.attempt_id),
         ).fetchone()
         assert dict(still_canceled) == {"status": "failed", "failure_class": "attempt_canceled"}
+        ignored_events = runtime.recent_events(run_id, limit=5, message_type="attempt.terminal_update_ignored")
+        assert len(ignored_events) == 1
+        assert ignored_events[0]["payload"]["requested_status"] == "completed"
+        assert ignored_events[0]["payload"]["current_attempt_status"] == "failed"
+        assert ignored_events[0]["payload"]["reported_returncode"] == 0
+
+        assert (
+            runtime.fail_attempt(
+                run_id,
+                assignment.attempt_id,
+                failure_class="agent_command_failed",
+                diagnostics="late failure",
+            )
+            is False
+        )
+        ignored_events = runtime.recent_events(run_id, limit=5, message_type="attempt.terminal_update_ignored")
+        assert len(ignored_events) == 2
+        assert ignored_events[-1]["payload"]["requested_status"] == "failed"
+        assert ignored_events[-1]["payload"]["failure_class"] == "agent_command_failed"
 
         retry_assignment = runtime.claim_next_task(run_id, "fast_local-00")
         assert retry_assignment is not None
